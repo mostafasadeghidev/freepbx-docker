@@ -102,6 +102,46 @@ docker compose logs -f freepbx
 docker compose exec freepbx bash -c 'tail -f /var/log/pbx/freepbx17-install-*.log'
 ```
 
+### ⚠️ `--opensourceonly` نصب را می‌شکند
+
+اندازه‌گیری شد روی نصب‌کنندهٔ نسخهٔ ۱.۱۵ (۱۴۰۵/۰۶/۱۷). این فلگ ماژول‌های
+تجاری را نصب **نمی‌کند** و بعد تلاش می‌کند همان‌ها را حذف کند:
+
+```
+xargs -t -I {} fwconsole ma -f remove {}
+Error at line: 1293 exiting with code 123
+```
+
+`xargs` وقتی هر فراخوانی‌اش شکست بخورد کد ۱۲۳ می‌دهد و `set -e` اسکریپت را
+همان‌جا می‌کشد — **بعد از اینکه همه‌چیز نصب شده و کار می‌کند**. در لاگ ۱۱۶ بار
+«نصب نیست» آمده بود.
+
+`INSTALL_ARGS` را خالی بگذارید. ماژول‌های تجاری نصب می‌شوند ولی بدون لایسنس
+کاری نمی‌کنند؛ هزینه‌شان دیسک است نه رفتار.
+
+### دو چیز دیگر که سرِ نصب واقعی پیش آمد
+
+**لاگ در `docker compose logs` نیست.** با systemd به‌عنوان PID 1، خروجی به
+ژورنالِ داخل کانتینر می‌رود. لاگ واقعی این‌جاست:
+
+```bash
+docker exec freepbx tail -f /var/log/pbx/freepbx17-install-*.log
+```
+
+**بعد از نصب، صفحهٔ پیش‌فرض دبیان را می‌بینید نه فری‌پی‌بی‌ایکس.** بستهٔ
+apache2 فایل `index.html` خودش را در ریشهٔ وب می‌گذارد و Apache آن را
+**قبل از** `index.php` فری‌پی‌بی‌ایکس سرو می‌کند:
+
+```
+DirectoryIndex index.html index.cgi index.pl index.php ...
+```
+
+کنارش بگذارید:
+
+```bash
+docker exec freepbx mv /var/www/html/index.html /var/www/html/index.html.debian-default
+```
+
 **حین نصب رم هاست را بپایید.** این پرریسک‌ترین لحظه است؛ اگر رم تمام شود کرنل
 یک پروسه را می‌کشد و ممکن است چیز دیگری روی همان سرور باشد.
 
