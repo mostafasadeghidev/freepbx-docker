@@ -37,8 +37,10 @@ services:
     #
     #     Failed to start mariadb.service: Unit mariadb.service not found.
     #
-    # Measured, on a real install, from pressing update in a UI. Recovery was
-    # a second twenty-minute install with the data untouched.
+    # Measured, on a real install, from pressing update in a UI. And recovery
+    # is not just "install again": the package sees a populated /var/www/html,
+    # decides FreePBX is already there, and never creates fwconsole. Getting
+    # back means wiping ./data and installing clean — so take the snapshot.
     #
     # `./snapshot.sh` commits the installed container to
     # `freepbx17-official:installed`. Point `image:` at that and comment the
