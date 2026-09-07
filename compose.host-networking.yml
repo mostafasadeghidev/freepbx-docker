@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# The original host-networking version, kept for a machine where it fits.
+#
+# Use this one when the server has nothing else on ports 80 and 443 and you
+# want the full 10000-20000 RTP range — a dedicated PBX box, in other words.
+# On a server that already runs a web proxy this file cannot work: host
+# networking has no port mapping, so Apache here would fight whatever already
+# holds 80/443.
+#
+#   docker compose -f compose.host-networking.yml up -d
+#
+# Ports it opens directly on the server:
+#   80/tcp, 443/tcp     FreePBX web UI (Apache)
+#   5060/udp, 5060/tcp  SIP (chan_pjsip)
+#   5061/tcp            SIP over TLS
+#   10000-20000/udp     RTP media
+#   8001/tcp, 8003/tcp  UCP (node)
+#   4569/udp            IAX2
+#   69/udp              TFTP phone provisioning
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    build:
+      context: .
+    image: freepbx17-official:local
+    container_name: freepbx
+    restart: unless-stopped
+
+    privileged: true
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 1m
+
+    network_mode: host
+
+    tmpfs:
+      - /run
+      - /run/lock
+
+    env_file:
+      - ./pbx.env
+
+    volumes:
+      - ./pbx.env:/etc/freepbx-container.env:ro
+      - ./data/persist:/data
+      - ./data/mysql:/var/lib/mysql
+      - ./data/etc-asterisk:/etc/asterisk
+      - ./data/lib-asterisk:/var/lib/asterisk
+      - ./data/spool-asterisk:/var/spool/asterisk
+      - ./data/log-asterisk:/var/log/asterisk
+      - ./data/log-pbx:/var/log/pbx
+      - ./data/www:/var/www/html
+      - ./data/home-asterisk:/home/asterisk

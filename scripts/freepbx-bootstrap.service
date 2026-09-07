@@ -1,0 +1,18 @@
+[Unit]
+Description=FreePBX 17 bootstrap (runs the official Sangoma installer once)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Options come from ./pbx.env, bind-mounted by compose.
+EnvironmentFile=-/etc/freepbx-container.env
+RemainAfterExit=yes
+# The installer pulls ~2 GB of packages and builds modules; do not time it out.
+TimeoutStartSec=0
+ExecStart=/usr/local/sbin/freepbx-bootstrap.sh
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

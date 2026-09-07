@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# FreePBX 17 (Asterisk 22, PHP 8.2) — Debian 12 + systemd + the official
+# Sangoma installer.
+#
+# Sized for ~20 extensions and a handful of calls a day, on a server that is
+# already busy. That size is the whole reason this file looks different from
+# the usual FreePBX-in-Docker recipe:
+#
+#   Bridge networking, not `network_mode: host`.
+#
+# Host networking is in those recipes because the default RTP range is
+# 10000-20000 — ten thousand UDP ports, which Docker will not publish at any
+# sensible speed. Twenty extensions do not need ten thousand ports. Forty is
+# plenty (two per call, twenty calls at once), and forty publish fine. In
+# exchange the container keeps its own network namespace, so it cannot collide
+# with anything already on the host — which on this server means Caddy keeps
+# ports 80 and 443 and nothing has to move.
+#
+# The one thing that MUST be right: Asterisk has to know it is behind NAT.
+# See the README — External Address and Local Networks in Asterisk SIP
+# Settings. Get that wrong and calls connect with silence on one side.
+#
+# The host-networking version of this file is kept beside it as
+# compose.host-networking.yml, for a machine where nothing else uses 80/443
+# and a full RTP range is wanted.
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    build:
+      context: .
+    image: freepbx17-official:local
+    container_name: freepbx
+    restart: unless-stopped
+
+    # systemd as PID 1 needs cgroup write access, and the FreePBX firewall
+    # module wants iptables. This is the price of running the official
+    # installer, which calls systemctl and cannot run without a real init.
+    privileged: true
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 1m
+
+    tmpfs:
+      - /run
+      - /run/lock
+
+    env_file:
+      - ./pbx.env
+
+    ports:
+      # --- SIP signalling -------------------------------------------------
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      # TLS. Uncomment once certificates are set up in FreePBX.
+      # - "5061:5061/tcp"
+
+      # --- RTP (the audio) ------------------------------------------------
+      # Must match the RTP range configured in FreePBX (Settings → Asterisk
+      # SIP Settings → RTP Port Ranges). Forty ports is about twenty calls at
+      # once. Widen both together if that is ever not enough.
+      - "10000-10039:10000-10039/udp"
+
+      # --- The web panel --------------------------------------------------
+      # Bound to localhost, so it is NOT on the internet. Caddy on this host
+      # publishes it as a proper HTTPS site — see the README.
+      - "127.0.0.1:8088:80"
+
+    volumes:
+      # installer options, read by the freepbx-bootstrap systemd unit
+      - ./pbx.env:/etc/freepbx-container.env:ro
+      # marker file + copies of /etc config that no other volume covers
+      - ./data/persist:/data
+      - ./data/mysql:/var/lib/mysql
+      - ./data/etc-asterisk:/etc/asterisk
+      - ./data/lib-asterisk:/var/lib/asterisk
+      - ./data/spool-asterisk:/var/spool/asterisk
+      - ./data/log-asterisk:/var/log/asterisk
+      - ./data/log-pbx:/var/log/pbx
+      - ./data/www:/var/www/html
+      - ./data/home-asterisk:/home/asterisk

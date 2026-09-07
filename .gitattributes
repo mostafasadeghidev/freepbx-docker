@@ -1,0 +1,12 @@
+# This project is authored on Windows and runs on Linux, and Git on Windows is
+# configured with core.autocrlf=true — so without this every file would be
+# checked out with CRLF endings.
+#
+# For a shell script that is not cosmetic: the kernel reads `#!/bin/bash\r`
+# as an interpreter named "bash\r", which does not exist, and the only
+# symptom is a script that refuses to run for no visible reason. The systemd
+# unit fails the same way.
+#
+# The Dockerfile already strips CR defensively at build time. This is the fix
+# one level up, so the files are correct before they ever get there.
+* text=auto eol=lf
