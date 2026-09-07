@@ -26,9 +26,28 @@
 # ---------------------------------------------------------------------------
 services:
   freepbx:
+    # ⚠️ AFTER THE FIRST INSTALL, RUN `./snapshot.sh` AND SWITCH THE IMAGE.
+    #
+    # The volumes below keep the *data*. They do not keep the *software*: the
+    # installer writes mariadb, apache, php, asterisk and their systemd units
+    # into the container's own filesystem, and `docker compose up` recreating
+    # the container throws all of that away. What is left is an empty Debian
+    # that reads the "already installed" marker in ./data and starts services
+    # that no longer exist:
+    #
+    #     Failed to start mariadb.service: Unit mariadb.service not found.
+    #
+    # Measured, on a real install, from pressing update in a UI. Recovery was
+    # a second twenty-minute install with the data untouched.
+    #
+    # `./snapshot.sh` commits the installed container to
+    # `freepbx17-official:installed`. Point `image:` at that and comment the
+    # `build:` block out, and a recreate starts from the installed state in
+    # seconds instead of destroying it.
     build:
       context: .
     image: freepbx17-official:local
+    # image: freepbx17-official:installed   # ← after ./snapshot.sh
     container_name: freepbx
     restart: unless-stopped
 
