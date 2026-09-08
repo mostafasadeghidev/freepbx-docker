@@ -60,6 +60,22 @@ services:
     stop_signal: SIGRTMIN+3
     stop_grace_period: 1m
 
+    # Docker's embedded resolver lives at 127.0.0.11 and only works because of
+    # a NAT rule inside the container's own network namespace. This container
+    # runs --privileged with systemd, and the FreePBX firewall module and
+    # fail2ban rewrite the whole iptables ruleset when they start — which wipes
+    # that rule and leaves the container with no DNS at all. Measured on this
+    # host: every other container resolved names fine, this one resolved
+    # nothing, and `iptables -t nat -S` inside it had no 127.0.0.11 entry.
+    #
+    # A PBX with no DNS cannot fetch module updates and cannot resolve a SIP
+    # trunk's hostname, so outbound calling dies quietly. Naming real resolvers
+    # sidesteps the embedded one entirely.
+    dns:
+      - 185.12.64.1
+      - 185.12.64.2
+      - 1.1.1.1
+
     tmpfs:
       - /run
       - /run/lock
