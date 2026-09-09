@@ -24,3 +24,7 @@ data/
 *~
 .DS_Store
 Thumbs.db
+
+# Infrastructure detail: server address, ports, network layout. This repo is
+# public; read it before deciding to publish this one.
+TUNNEL.md*

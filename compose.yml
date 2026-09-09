@@ -71,10 +71,39 @@ services:
     # A PBX with no DNS cannot fetch module updates and cannot resolve a SIP
     # trunk's hostname, so outbound calling dies quietly. Naming real resolvers
     # sidesteps the embedded one entirely.
+    # ⚠️ This applies only to a container CREATED with it. `docker restart`
+    # and a host reboot both re-use the container's existing configuration and
+    # never re-read this file, so an older container keeps the broken DNS and
+    # the fix looks like it did not work. `docker compose up -d` is what
+    # applies it -- that recreates, which is the point.
     dns:
       - 185.12.64.1
       - 185.12.64.2
       - 1.1.1.1
+
+    # Two questions, because both were answered "yes" while the phones were
+    # dead, and neither was being asked:
+    #
+    #   Can it resolve a name?  The FreePBX firewall module wipes Docker's DNS
+    #   rule, and a PBX that cannot resolve its trunk's hostname registers
+    #   nothing -- while a probe by IP from the same container answers 200 OK.
+    #   That contradiction cost an hour before anybody thought to check DNS.
+    #
+    #   Is Asterisk actually up?  systemd reports the unit started long before
+    #   Asterisk is answering.
+    #
+    # Any resolvable name does the job; this one is used because a PBX that
+    # cannot reach it cannot fetch module updates either.
+    #
+    # start_period covers the first install, which downloads several GB and
+    # takes 20-40 minutes. During it the container is "starting", not
+    # "unhealthy" -- a failing healthcheck on a fresh install would be noise.
+    healthcheck:
+      test: ["CMD-SHELL", "getent hosts mirror.freepbx.org >/dev/null 2>&1 && asterisk -rx 'core show version' >/dev/null 2>&1"]
+      interval: 5m
+      timeout: 20s
+      start_period: 45m
+      retries: 3
 
     tmpfs:
       - /run

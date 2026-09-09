@@ -40,12 +40,56 @@ for f in "${PERSIST_FILES[@]}"; do
     fi
 done
 
+# --- the FreePBX firewall module, inside a container -----------------------
+#
+# It assumes it owns the machine's netfilter. In a container it does not:
+# Docker put its own rules in that same network namespace, and the module
+# rebuilds the whole ruleset when it starts. Two things this measurably breaks:
+#
+#   1. DNS. Docker's resolver at 127.0.0.11 works only because of a NAT rule
+#      the module wipes. The `dns:` block in compose.yml sidesteps that by
+#      naming real resolvers -- but only for a container CREATED with it, and
+#      `docker restart` does not re-read compose. A container made before that
+#      line was added keeps resolving nothing, and the symptom is remote: SIP
+#      trunks never register because Asterisk cannot resolve their hostname,
+#      while a probe by IP from the same container answers fine.
+#
+#   2. Legitimate clients. `fpbxratelimit` moves a source to an ATTACKER list
+#      after ~100 packets in 300s -- which a busy softphone reaches -- and then
+#      DROPs silently. Worse, each dropped packet re-arms the timer, so a
+#      client that keeps retrying keeps itself banned. It looks like
+#      "Request Timeout", never like "you are blocked".
+#
+# fail2ban runs separately, stays on, and bans the thing that actually matters
+# (repeated auth failures). So the default here is to leave the module off and
+# let anyone who wants it opt back in with PBX_FIREWALL=on in pbx.env.
+#
+# Run on EVERY boot, not just after install: a module update can re-enable it.
+apply_firewall_choice() {
+    command -v fwconsole >/dev/null 2>&1 || return 0
+    case "${PBX_FIREWALL:-off}" in
+        on|On|ON|yes|true|1)
+            echo "[bootstrap] PBX_FIREWALL=on - leaving the FreePBX firewall alone."
+            echo "[bootstrap]   watch for: no DNS after a restart, and legitimate"
+            echo "[bootstrap]   clients dropped by fpbxratelimit. See the README."
+            ;;
+        *)
+            if fwconsole firewall status 2>/dev/null | grep -qi "disabled"; then
+                return 0
+            fi
+            echo "[bootstrap] disabling the FreePBX firewall module (PBX_FIREWALL=off)."
+            fwconsole firewall disable >/dev/null 2>&1                 && echo "[bootstrap]   done - fail2ban is unaffected and stays on."                 || echo "[bootstrap]   could not disable it; carrying on."
+            ;;
+    esac
+}
+
 # --- already installed: just bring the stack up ----------------------------
 if [ -f "$STAMP" ]; then
     echo "[bootstrap] FreePBX already installed ($(cat "$STAMP")) - starting services."
     systemctl start mariadb || true
     systemctl start apache2 || true
     systemctl start freepbx || true
+    apply_firewall_choice
     exit 0
 fi
 
@@ -74,6 +118,8 @@ bash "$INSTALLER" ${INSTALL_ARGS:-}
 for f in "${PERSIST_FILES[@]}"; do
     if [ -f "/etc/${f}" ]; then cp -a "/etc/${f}" "${PERSIST_DIR}/${f}"; fi
 done
+
+apply_firewall_choice
 
 date -u +%FT%TZ > "$STAMP"
 echo "[bootstrap] ============================================================"
