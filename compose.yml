@@ -60,22 +60,13 @@ services:
     stop_signal: SIGRTMIN+3
     stop_grace_period: 1m
 
-    # Docker's embedded resolver lives at 127.0.0.11 and only works because of
-    # a NAT rule inside the container's own network namespace. This container
-    # runs --privileged with systemd, and the FreePBX firewall module and
-    # fail2ban rewrite the whole iptables ruleset when they start — which wipes
-    # that rule and leaves the container with no DNS at all. Measured on this
-    # host: every other container resolved names fine, this one resolved
-    # nothing, and `iptables -t nat -S` inside it had no 127.0.0.11 entry.
+    # DNS. Read the volume mount below before changing any of this.
     #
-    # A PBX with no DNS cannot fetch module updates and cannot resolve a SIP
-    # trunk's hostname, so outbound calling dies quietly. Naming real resolvers
-    # sidesteps the embedded one entirely.
-    # ⚠️ This applies only to a container CREATED with it. `docker restart`
-    # and a host reboot both re-use the container's existing configuration and
-    # never re-read this file, so an older container keeps the broken DNS and
-    # the fix looks like it did not work. `docker compose up -d` is what
-    # applies it -- that recreates, which is the point.
+    # `dns:` alone does NOT do what it looks like it does. Docker still writes
+    # `nameserver 127.0.0.11` into the container's resolv.conf and treats this
+    # list only as that embedded resolver's upstreams -- the container stays
+    # dependent on the resolver, and on the NAT rule that makes it reachable.
+    # Kept because it is still the right upstream list if the mount is removed.
     dns:
       - 185.12.64.1
       - 185.12.64.2
@@ -131,6 +122,25 @@ services:
       - "127.0.0.1:8088:80"
 
     volumes:
+      # The DNS fix that actually works, and the reasoning is worth keeping
+      # because the obvious fix does not.
+      #
+      # Docker's embedded resolver at 127.0.0.11 does not answer in this
+      # container. Measured, from inside it: a DNS query to 127.0.0.11 times
+      # out; the same query to 1.1.1.1 answers in milliseconds. So the fault is
+      # the embedded resolver, not the network -- and `dns:` cannot help,
+      # because Docker keeps pointing resolv.conf at that same resolver.
+      #
+      # The FreePBX firewall module made this worse by wiping the NAT rule the
+      # resolver needs, but disabling the module did not fix it: the rules came
+      # back on recreate and the resolver still timed out. Replacing the file
+      # outright is what worked.
+      #
+      # What this costs: the container can no longer resolve other containers
+      # by name. Nothing here needs to -- mariadb, apache and asterisk are all
+      # inside this one. A proxy in front resolves THIS container from its own
+      # side, which is unaffected.
+      - ./resolv.conf:/etc/resolv.conf:ro
       # installer options, read by the freepbx-bootstrap systemd unit
       - ./pbx.env:/etc/freepbx-container.env:ro
       # marker file + copies of /etc config that no other volume covers
