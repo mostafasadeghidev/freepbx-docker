@@ -9,8 +9,13 @@
 .env
 pbx.env
 
-# The tunnel's own credentials. The example beside them is a shape, not a key.
+# The tunnel's own credentials and the config built from the example. The
+# examples beside them are shapes, not keys.
 tunnel/client.ovpn
+tunnel/server.conf
+tunnel/users
+tunnel/pki/
+tunnel/ccd/
 tunnel/*.key
 tunnel/*.crt
 tunnel/*.pem

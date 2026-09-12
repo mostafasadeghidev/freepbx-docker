@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# The listening end of the tunnel. Copy it to `server.conf` and read the three
+# marked lines — everything else works as it stands.
+#
+#     cp tunnel/server.conf.example tunnel/server.conf
+#
+# Shaped to match what a MikroTik's `ovpn-client` actually speaks: TCP, sha1,
+# aes256-cbc, and a name and password with no client certificate. Verified
+# against RouterOS 7.25 with `certificate=none verify-server-certificate=no`.
+# ---------------------------------------------------------------------------
+mode server
+tls-server
+dev tun
+proto tcp-server
+
+# ① The port. Must match TUNNEL_PORT in .env and the router's `port=`.
+port 1194
+
+topology subnet
+
+# ② The tunnel's own little network. Any private range that collides with
+#    nothing on either side; 10.97.0.1 ends up on this machine and the far end
+#    gets 10.97.0.2.
+server 10.97.0.0 255.255.255.0
+
+ca   /etc/tunnel/pki/ca.crt
+cert /etc/tunnel/pki/server.crt
+key  /etc/tunnel/pki/server.key
+dh none
+
+# A name and a password, no client certificate — which is all a RouterOS
+# ovpn-client needs, and one less thing to distribute and renew.
+verify-client-cert none
+username-as-common-name
+script-security 3
+auth-user-pass-verify /etc/tunnel/check-user.sh via-env
+
+auth SHA1
+data-ciphers AES-256-CBC:AES-256-GCM
+data-ciphers-fallback AES-256-CBC
+
+# ③ THE ONE THAT COSTS AN HOUR IF IT IS MISSING.
+#
+# The operator's network, twice: `route` puts it in this machine's routing
+# table, and the matching `iroute` in ccd/<user> tells OpenVPN which client
+# owns it. Without the iroute the kernel hands the packet to tun0, OpenVPN
+# looks for a client that owns that address, finds none, and drops it —
+# silently. Measured: the far end saw keepalives and nothing else, and its own
+# counter for that network never moved.
+#
+# Replace with whatever network your telephone provider answers on.
+route 203.0.113.0 255.255.255.0
+client-config-dir /etc/tunnel/ccd
+
+keepalive 10 60
+persist-key
+persist-tun
+verb 3
+status /etc/tunnel/pki/status.log 5

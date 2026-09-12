@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# The tunnel, the other way round: this machine LISTENS and the other side
+# dials in.
+#
+#     docker compose -f compose.yml -f compose.tunnel-server.yml up -d
+#
+# ## When you need this instead of the client profile
+#
+# The `tunnel` profile in compose.yml is a client: the PBX dials out to
+# something that can be dialled. That is the right shape when the far end has
+# a public address.
+#
+# It usually does not. The far end is typically a router on somebody's office
+# line or a SIM, behind the provider's NAT, with no address anybody can reach.
+# Then the direction has to reverse: the PBX — which is on a server, and does
+# have an address — listens, and the router connects in. Measured on a real
+# line: both the LTE interface and the PPPoE one held addresses out of
+# 100.64.0.0/10, carrier NAT, neither reachable from outside.
+#
+# ## What it does
+#
+# `network_mode: service:freepbx` puts the tunnel inside the PBX's own network
+# namespace, so `tun0` and its routes belong to Asterisk directly — no host
+# routing, no second NAT, and nothing to undo on the host when the tunnel
+# stops. The port is published by the PBX service, which is why this file adds
+# it there: compose appends port lists across files.
+#
+# ## Before starting it
+#
+#     ./tunnel/make-server-pki.sh          once, to make a CA and a server key
+#     printf 'router:a-long-password\n' > tunnel/users
+#     cp tunnel/server.conf.example tunnel/server.conf   # then edit it
+#
+# `tunnel/users`, the keys and `server.conf` are all git-ignored.
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    ports:
+      # Where the far end dials in. TCP by default, because a TCP tunnel looks
+      # like an ordinary connection to whatever sits in the middle — which on
+      # some paths is the difference between a tunnel and no tunnel.
+      #
+      # ⚠️ Not 443 on a machine that runs Coolify: its Traefik owns 443 and
+      #    443/udp, and there is nothing left to share.
+      - "${TUNNEL_PORT:-1194}:${TUNNEL_PORT:-1194}/tcp"
+
+  tunnel-server:
+    image: ${TUNNEL_IMAGE:-alpine:3.20}
+    container_name: freepbx-tunnel-server
+    restart: unless-stopped
+    depends_on:
+      - freepbx
+    # Inside the PBX's namespace: tun0 and the operator route are Asterisk's own.
+    network_mode: service:freepbx
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./tunnel:/etc/tunnel
+    command: >
+      sh -c "apk add --no-cache openvpn >/dev/null &&
+             exec openvpn --config /etc/tunnel/server.conf"
