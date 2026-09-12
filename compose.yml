@@ -46,10 +46,13 @@ services:
     # `freepbx17-official:installed`. Point `image:` at that and comment the
     # `build:` block out, and a recreate starts from the installed state in
     # seconds instead of destroying it.
+    # `PBX_IMAGE` in .env decides where the software comes from: the default
+    # builds it here, and a registry reference pulls it instead. The build
+    # block stays either way — compose only uses it when the image is missing,
+    # so pointing PBX_IMAGE at a registry costs nothing.
     build:
       context: .
-    image: freepbx17-official:local
-    # image: freepbx17-official:installed   # ← after ./snapshot.sh
+    image: ${PBX_IMAGE:-freepbx17-official:local}
     container_name: freepbx
     restart: unless-stopped
 
@@ -100,13 +103,19 @@ services:
       - /run
       - /run/lock
 
+    # Both, and neither is required: `.env` answers compose's questions and
+    # `pbx.env` the installer's. An installation that predates the split has
+    # only the second, and still works.
     env_file:
-      - ./pbx.env
+      - path: ./.env
+        required: false
+      - path: ./pbx.env
+        required: false
 
     ports:
       # --- SIP signalling -------------------------------------------------
-      - "5060:5060/udp"
-      - "5060:5060/tcp"
+      - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIP_PORT:-5060}:5060/tcp"
       # TLS. Uncomment once certificates are set up in FreePBX.
       # - "5061:5061/tcp"
 
@@ -114,12 +123,12 @@ services:
       # Must match the RTP range configured in FreePBX (Settings → Asterisk
       # SIP Settings → RTP Port Ranges). Forty ports is about twenty calls at
       # once. Widen both together if that is ever not enough.
-      - "10000-10039:10000-10039/udp"
+      - "${RTP_START:-10000}-${RTP_END:-10039}:${RTP_START:-10000}-${RTP_END:-10039}/udp"
 
       # --- The web panel --------------------------------------------------
       # Bound to localhost, so it is NOT on the internet. Caddy on this host
       # publishes it as a proper HTTPS site — see the README.
-      - "127.0.0.1:8088:80"
+      - "${PANEL_BIND:-127.0.0.1}:${PANEL_PORT:-8088}:80"
 
     volumes:
       # The DNS fix that actually works, and the reasoning is worth keeping
@@ -153,3 +162,42 @@ services:
       - ./data/log-pbx:/var/log/pbx
       - ./data/www:/var/www/html
       - ./data/home-asterisk:/home/asterisk
+
+  # -------------------------------------------------------------------------
+  # The tunnel. Off unless COMPOSE_PROFILES=tunnel in .env.
+  #
+  # It exists for one situation: the PBX is on a server outside the country
+  # and the telephone provider will only exchange calls with an address inside
+  # it. The tunnel gives this container a second address on that side, and the
+  # provider talks to that.
+  #
+  # Most installations do not need it. A PBX on a server in the same country
+  # as its provider should leave this off and never think about it again.
+  #
+  # `network_mode: service:freepbx` puts the tunnel INSIDE the PBX's network
+  # namespace rather than beside it — the two share one set of interfaces, so
+  # Asterisk sees the tunnel address as its own without any routing rules on
+  # the host. The price is that the tunnel cannot start on its own: it lives
+  # and dies with the PBX container.
+  #
+  # Put your provider's .ovpn file at tunnel/client.ovpn — see tunnel/README.md.
+  # -------------------------------------------------------------------------
+  tunnel:
+    image: ${TUNNEL_IMAGE:-alpine:3.20}
+    container_name: freepbx-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on:
+      - freepbx
+    network_mode: service:freepbx
+    # NET_ADMIN to create the interface, /dev/net/tun to be a tunnel at all.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./tunnel:/etc/tunnel:ro
+    command: >
+      sh -c "apk add --no-cache openvpn >/dev/null &&
+             exec openvpn --config /etc/tunnel/client.ovpn
+                          --auth-nocache --verb 3"

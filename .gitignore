@@ -3,9 +3,17 @@
 # Everything that could carry a secret, a password or somebody's voice is here.
 # ---------------------------------------------------------------------------
 
-# The real environment file. `pbx.env.example` is the template that ships.
-# An .env carries nothing secret today; it is where secrets end up tomorrow.
+# The real environment files. `.env.example` and `pbx.env.example` are the
+# templates that ship. Neither carries a secret today; an .env is where secrets
+# end up tomorrow, and a public repository is not the place to find that out.
+.env
 pbx.env
+
+# The tunnel's own credentials. The example beside them is a shape, not a key.
+tunnel/client.ovpn
+tunnel/*.key
+tunnel/*.crt
+tunnel/*.pem
 
 # Docker creates these on first run. They hold the MariaDB database (with the
 # password the installer generates in freepbx.conf), Asterisk's config, the

@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# A SHAPE, not a configuration. Copy it to `client.ovpn` and replace the
+# placeholders with what your tunnel provider gave you — or, if the other end
+# is your own server, with what `server.conf.example` beside this file serves.
+#
+# `client.ovpn` is git-ignored. Whatever you put in it stays on this machine.
+# ---------------------------------------------------------------------------
+
+client
+dev tun
+
+# TCP rather than UDP, deliberately, when the tunnel has to survive a hostile
+# path: a TCP tunnel looks like an ordinary connection to whatever is in the
+# middle. It costs latency. On a clean link, `proto udp` is the better choice
+# for voice.
+proto tcp-client
+
+# WHERE THE OTHER END IS. Replace both.
+remote TUNNEL_SERVER_ADDRESS 443
+
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+
+# Stay quiet about a link that flaps; voice would rather reconnect than log.
+verb 3
+mute 10
+
+# Keep the connection alive through a NAT that forgets idle flows.
+keepalive 10 60
+
+remote-cert-tls server
+cipher AES-256-GCM
+auth SHA256
+
+# --- credentials ------------------------------------------------------------
+# Paste what the provider gave you between the markers, or point at files in
+# this same folder (they are git-ignored too):
+#
+#     ca ca.crt
+#     cert client.crt
+#     key client.key
+
+<ca>
+-----BEGIN CERTIFICATE-----
+REPLACE WITH THE CERTIFICATE AUTHORITY YOU WERE GIVEN
+-----END CERTIFICATE-----
+</ca>
+
+<cert>
+-----BEGIN CERTIFICATE-----
+REPLACE WITH THIS CLIENT'S CERTIFICATE
+-----END CERTIFICATE-----
+</cert>
+
+<key>
+-----BEGIN PRIVATE KEY-----
+REPLACE WITH THIS CLIENT'S PRIVATE KEY — AND KEEP IT OFF EVERY REPOSITORY
+-----END PRIVATE KEY-----
+</key>
