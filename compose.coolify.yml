@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# The panel through Coolify's own proxy, on a machine Coolify manages.
+#
+#     PANEL_DOMAIN=pbx.example.com \
+#       docker compose -f compose.yml -f compose.coolify.yml up -d
+#
+# Use it when the customer's server already runs Coolify and you want the web
+# panel on a real domain with a real certificate. Everything else stays as it
+# is: the telephone ports are published straight onto the host, because voice
+# does not go through an HTTP proxy and never will.
+#
+# ## Why this file has to exist
+#
+# "Leave the panel on 127.0.0.1 and point Coolify at it" is the obvious advice
+# and it does not work. Measured on a clean Ubuntu 26.04 with Coolify
+# installed beside this kit:
+#
+#     docker exec coolify-proxy wget http://10.0.0.1:8088/
+#       → Connection refused          (bound to the host's loopback, not the bridge)
+#     docker exec coolify-proxy wget http://freepbx:80/
+#       → bad address 'freepbx'       (freepbx-docker_default ≠ coolify)
+#
+# A proxy in a container cannot reach a port bound to the host's loopback, and
+# cannot resolve a container on a network it is not attached to. So the answer
+# is the same one Caddy uses on the author's own server: put the PBX on the
+# proxy's network and let the proxy reach it by name.
+#
+# ## What Coolify still owns
+#
+# Ports 80 and 443 — its Traefik listens on both, and on 443/udp for HTTP/3.
+# Do not run the tunnel profile on 443 here; there is nothing left to share it
+# with. Coolify's own interface stays on 8000.
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    networks:
+      # Its own network, still, for everything that is not the panel.
+      - default
+      # And Coolify's, which is the only way its proxy can see this container.
+      - coolify
+    labels:
+      traefik.enable: "true"
+      # Named explicitly because this container is on two networks and Traefik
+      # would otherwise pick whichever it found first.
+      traefik.docker.network: coolify
+
+      # Plain HTTP exists only to send the browser to HTTPS — and to answer
+      # Let's Encrypt's challenge, which arrives on this entrypoint.
+      traefik.http.routers.pbx-http.rule: Host(`${PANEL_DOMAIN:?set PANEL_DOMAIN to the name this panel answers on}`)
+      traefik.http.routers.pbx-http.entrypoints: http
+      traefik.http.routers.pbx-http.middlewares: pbx-to-https
+      traefik.http.middlewares.pbx-to-https.redirectscheme.scheme: https
+
+      traefik.http.routers.pbx.rule: Host(`${PANEL_DOMAIN}`)
+      traefik.http.routers.pbx.entrypoints: https
+      traefik.http.routers.pbx.tls: "true"
+      traefik.http.routers.pbx.tls.certresolver: letsencrypt
+      # The port *inside* the container. Nothing to do with PANEL_PORT, which
+      # is where the host publishes it for anyone who wants it locally.
+      traefik.http.services.pbx.loadbalancer.server.port: "80"
+
+networks:
+  coolify:
+    # Created by Coolify's installer. This file does not own it and must not
+    # try to make it.
+    external: true

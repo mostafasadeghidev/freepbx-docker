@@ -56,8 +56,9 @@ docker commit \
     "$CONTAINER" "$IMAGE"
 
 echo
-echo "Done. Now in compose.yml:"
-echo "    image: $IMAGE"
-echo "  and comment out the build: block."
+echo "Done. Now point the kit at it — one line in .env:"
+echo "    PBX_IMAGE=$IMAGE"
+echo "(./setup.sh writes that itself; this message is for a snapshot taken by hand,"
+echo " after a module upgrade or a package upgrade.)"
 echo
 docker image ls "$IMAGE"

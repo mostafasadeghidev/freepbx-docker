@@ -91,15 +91,22 @@ fi
 # The RTP range FreePBX believes in, against the ports Docker actually
 # publishes. These two drift apart the moment somebody widens one of them, and
 # the symptom is one-way audio on the calls that land outside the overlap.
-conf_start=$(dex sh -c "grep -h '^rtpstart' /etc/asterisk/rtp.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r'")
-conf_end=$(dex sh -c "grep -h '^rtpend' /etc/asterisk/rtp.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r'")
+#
+# Read `rtp_additional.conf` as well: FreePBX owns the `_additional` files and
+# `rtp.conf` only includes them, so the number that matters was in the file
+# this check ignored — it said "could not read the range" while the range was
+# plainly wrong. Measured on a clean install: FreePBX ships 10000-20000
+# against the 40 ports the kit publishes, so this fails on every new machine
+# until somebody fixes it. That is the point of it.
+conf_start=$(dex sh -c "grep -hE '^rtpstart' /etc/asterisk/rtp_additional.conf /etc/asterisk/rtp.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r'")
+conf_end=$(dex sh -c "grep -hE '^rtpend' /etc/asterisk/rtp_additional.conf /etc/asterisk/rtp.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r'")
 env_start=$(grep -E '^RTP_START=' .env 2>/dev/null | cut -d= -f2 | tr -d ' \r')
 env_end=$(grep -E '^RTP_END=' .env 2>/dev/null | cut -d= -f2 | tr -d ' \r')
 env_start=${env_start:-10000}
 env_end=${env_end:-10039}
 
 if [ -z "${conf_start:-}" ]; then
-    hmm "Could not read the RTP range from /etc/asterisk/rtp.conf"
+    hmm "Could not read the RTP range from rtp_additional.conf or rtp.conf"
 elif [ "$conf_start" = "$env_start" ] && [ "$conf_end" = "$env_end" ]; then
     ok "RTP range agrees: $conf_start-$conf_end in FreePBX and in .env"
 else
@@ -108,7 +115,10 @@ else
     note "Settings → Asterisk SIP Settings → RTP Port Ranges."
 fi
 
-published=$(docker port freepbx 2>/dev/null | grep -c '/udp' || true)
+# Counted by container port, not by line: Docker lists every published port
+# twice — once for 0.0.0.0 and once for [::] — and the first version of this
+# reported 82 where 41 was right.
+published=$(docker port freepbx 2>/dev/null | awk -F/ '/\/udp/ {print $1}' | sort -u | wc -l)
 want=$(( env_end - env_start + 1 + 1 ))   # the RTP ports plus SIP/udp
 if [ "$published" -ge "$want" ]; then
     ok "$published UDP ports are published"
@@ -121,22 +131,35 @@ fi
 
 head_ "The FreePBX firewall module"
 
-fw=$(dex fwconsole firewall status 2>/dev/null | head -1)
-case "$fw" in
-    *[Dd]isabled*) ok "disabled — which is right inside a container" ;;
-    "")            hmm "could not read its state" ;;
-    *)             bad "it is enabled: $fw"
-                   note "In a container it wipes Docker's DNS rule and silently drops"
-                   note "legitimate telephones after a few minutes. Set PBX_FIREWALL=off"
-                   note "in pbx.env and restart. fail2ban is separate and stays on." ;;
-esac
+# Asked of netfilter, not of fwconsole.
+#
+# `fwconsole firewall status` is not a command on FreePBX 17 — it answers with
+# its own usage text, and the first version of this check read that as "the
+# firewall is enabled" and reported a fault on a clean machine. The module is
+# always listed as "Enabled" by `fwconsole ma list`; that means installed, not
+# running.
+#
+# What cannot be misread is whether it owns any rules. Measured on a clean
+# install with PBX_FIREWALL=off: zero.
+fw_rules=$(dex sh -c "iptables -S 2>/dev/null | grep -ciE 'fpbx'")
+fw_flag=$(dex sh -c "test -e /etc/asterisk/firewall.enabled && echo on || echo off")
+if [ "${fw_rules:-0}" -gt 0 ] || [ "$fw_flag" = "on" ]; then
+    bad "it is active (${fw_rules:-0} rules, marker ${fw_flag})"
+    note "In a container it wipes Docker's DNS rule and silently drops"
+    note "legitimate telephones after a few minutes. Set PBX_FIREWALL=off"
+    note "in pbx.env and restart. fail2ban is separate and stays on."
+else
+    ok "not active — which is right inside a container"
+fi
 
 # --- what it is carrying ----------------------------------------------------
 
 head_ "What is on it"
 
-exts=$(dex asterisk -rx 'pjsip show endpoints' | grep -c '^ Endpoint:' || echo 0)
-regs=$(dex asterisk -rx 'pjsip show registrations' | grep -ci 'Registered' || echo 0)
+# `grep -c` prints 0 and exits 1 when it matches nothing, so the `|| echo 0`
+# after it printed the zero a second time — "0" then "0" on the report.
+exts=$(dex asterisk -rx 'pjsip show endpoints' | grep -c '^ Endpoint:'; true)
+regs=$(dex asterisk -rx 'pjsip show registrations' | grep -ci 'Registered'; true)
 calls=$(dex asterisk -rx 'core show channels' | grep -oE '[0-9]+ active call' | head -1)
 printf '      extensions and trunks configured: %s\n' "${exts:-0}"
 printf '      trunk registrations up:           %s\n' "${regs:-0}"
@@ -151,11 +174,23 @@ fi
 
 head_ "If this server disappeared tonight"
 
-if docker image inspect freepbx17-official:installed >/dev/null 2>&1; then
-    ok "An installed image exists here (freepbx17-official:installed)"
+# Not a nicety: the software lives in the container's filesystem, and any
+# recreate rebuilds that from whatever `PBX_IMAGE` names. If it still names
+# the build image, the install is one `docker compose up -d` from gone — and
+# ./data will still say "installed", so nothing reinstalls it.
+#
+# Measured while testing this kit: applying one compose override was enough.
+# `Failed to start mariadb.service: Unit mariadb.service not found.`
+env_image=$(grep -E '^PBX_IMAGE=' .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
+if ! docker image inspect freepbx17-official:installed >/dev/null 2>&1; then
+    bad "No snapshot image — this install is one 'docker compose up -d' from gone."
+    note "Run ./snapshot.sh, then set PBX_IMAGE=freepbx17-official:installed in .env."
+elif [ "${env_image:-}" = "freepbx17-official:installed" ]; then
+    ok "A recreate is survivable (PBX_IMAGE points at the installed image)"
 else
-    hmm "No snapshot image. ./snapshot.sh makes one — read the README first."
-    note "Without it, a recreate of this container throws the installed software away."
+    bad "A snapshot exists but .env still says PBX_IMAGE=${env_image:-<unset>}"
+    note "A recreate would start from the build image and erase the install."
+    note "Set PBX_IMAGE=freepbx17-official:installed in .env."
 fi
 
 data_kb=$(du -sk ./data 2>/dev/null | cut -f1)

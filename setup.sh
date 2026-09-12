@@ -193,11 +193,64 @@ while true; do
         docker compose logs --tail 40 freepbx || true
         die "Install did not finish. Fix what that says, then run: docker compose up -d"
     fi
+    # One line that rewrites itself on a terminal, one line per minute in a
+    # log. `\r` in a redirected file is not a moving line, it is sixty copies
+    # of the same sentence — measured, on the first real install.
     mins=$(( ( $(date +%s) - started ) / 60 ))
-    printf '\r  installing… %s minutes' "$mins"
+    if [ -t 1 ]; then
+        printf '\r  installing… %s minutes' "$mins"
+    elif [ "$mins" != "${said:-}" ]; then
+        printf '  installing… %s minutes\n' "$mins"
+        said=$mins
+    fi
     sleep 20
 done
 printf '\r  installed in %s minutes.        \n' "$(( ( $(date +%s) - started ) / 60 ))"
+
+# --- make it survive its own next start ------------------------------------
+
+step "Making the install survivable"
+
+# This is not an optimisation. Without it the next `docker compose up -d` —
+# an override applied, a port changed, a Docker upgrade — recreates the
+# container from the build image and the installed software is gone, while
+# ./data still says "installed" so nothing reinstalls it.
+#
+# Measured on a clean Ubuntu 26.04 while testing this very kit: applying one
+# compose override recreated the container, and the next boot said
+#
+#     Failed to start mariadb.service: Unit mariadb.service not found.
+#
+# fwconsole gone, Asterisk gone, and the documented way back is to wipe the
+# data folder and install again from nothing. The README has warned about this
+# since the beginning, and a kit that relies on somebody reading a warning has
+# not solved it. So it happens here, now, before anything can recreate it.
+say "The installer wrote its software into the container's filesystem, which"
+say "any recreate rebuilds from the image. So the installed container becomes"
+say "the image it starts from — otherwise the next 'up -d' erases it."
+say ""
+
+# `snapshot.sh` refuses a half-started install, and right after the installer
+# returns the units are not always up yet.
+for _ in $(seq 1 18); do
+    up=1
+    for unit in mariadb apache2 freepbx; do
+        docker compose exec -T freepbx systemctl is-active --quiet "$unit" 2>/dev/null || up=0
+    done
+    [ "$up" = 1 ] && break
+    sleep 10
+done
+
+if ./snapshot.sh; then
+    sed -i "s#^PBX_IMAGE=.*#PBX_IMAGE=freepbx17-official:installed#" .env
+    say ""
+    say ".env now says PBX_IMAGE=freepbx17-official:installed"
+    say "A recreate from here starts from the installed state, in seconds."
+else
+    warn "The snapshot did not run. Until it does, DO NOT run 'docker compose up -d'"
+    warn "again — it would recreate the container and erase the install."
+    warn "Fix what it said, then run: ./snapshot.sh"
+fi
 
 # --- what is left for a person ---------------------------------------------
 
