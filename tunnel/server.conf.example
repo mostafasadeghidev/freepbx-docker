@@ -57,3 +57,11 @@ persist-key
 persist-tun
 verb 3
 status /etc/tunnel/pki/status.log 5
+
+# Voice rides this tunnel, and a TCP socket with Nagle on holds small packets
+# until the previous ones are acknowledged — about one round trip. Measured on
+# a live call through a tunnel built without this line (sockflags = 0 in its
+# option dump): ~4 RTP packets per TCP segment, and the tunnel's round trip
+# rose from 98 ms idle to a 230-270 ms median while the line under it stayed at
+# ~100 ms. This sets TCP_NODELAY here and pushes the same flag to the client.
+tcp-nodelay

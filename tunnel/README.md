@@ -97,14 +97,33 @@ COMPOSE_FILE=compose.yml:compose.tunnel-server.yml
 روتر:
 
 ```
+/routing table add name=lte-route fib
 /ip firewall address-list add list=voip.example address=203.0.113.0/24
 /ip firewall mangle add chain=prerouting action=mark-routing \
   new-routing-mark=lte-route dst-address-list=voip.example passthrough=no
 /ip route add dst-address=0.0.0.0/0 gateway=lte1 routing-table=lte-route
 ```
 
+خطِ اول در RouterOS 7 لازم است: تا جدولِ مسیر ساخته نشده باشد،
+`/ip route add routing-table=…` رد می‌شود. اگر روترت از قبل جدولی به این نام
+دارد، همان خط خطا می‌دهد و بقیه درست کار می‌کنند.
+
 این قانون روی **مقصد** کار می‌کند نه مبدأ، پس ترافیکی که از تونل می‌آید را هم
 می‌گیرد و لازم نیست چیزی برای تونل جدا نوشته شود.
+
+زانا (از نسخهٔ ۵.۳ به بعد) همین خط‌ها را برای روتری که در زانا نیست، با
+رمزِ واقعی و به شکلی که دو بار paste کردنش چیزی را دو بار نسازد، خودش می‌سازد:
+صفحهٔ تلفن → «وصل کردنِ یک روتر» → «روتری که در زانا نیست».
+
+### صدای تماس از روی TCP
+
+`server.conf.example` خطِ `tcp-nodelay` دارد. بدونِ آن، سوکتِ TCPِ تونل بسته‌های
+کوچکِ صدا را تا رسیدنِ تأییدِ قبلی نگه می‌دارد. اندازه‌گیری‌شده روی یک تماسِ
+واقعی در تونلی که این خط را نداشت: حدودِ چهار بستهٔ صدا در هر قطعهٔ TCP، و
+رفت‌وبرگشتِ تونل از ۹۸ میلی‌ثانیه به میانهٔ ۲۳۰ تا ۲۷۰ رسید، درحالی‌که خطِ
+زیرش همان ۱۰۰ ماند. روی نصبی که از قبل تونل دارد، خط را به `tunnel/server.conf`
+اضافه کن و `docker restart freepbx-tunnel-server` بزن — تونل چند ثانیه قطع و
+دوباره وصل می‌شود، پس وقتی تماسی در جریان نیست.
 
 ---
 
