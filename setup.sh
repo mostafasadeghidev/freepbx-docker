@@ -375,29 +375,53 @@ else
     warn "Fix what it said, then run: ./snapshot.sh"
 fi
 
+# --- the two settings that decide whether calls have sound -----------------
+#
+# A fresh FreePBX hands out voice ports 10000-20000 against the forty this kit
+# publishes, and knows no public address — one-way audio on the first call.
+# Both have one right answer on a machine set up this way, so they are set
+# here rather than left on a list. See nat.sh.
+step "Telling Asterisk its public address and its voice ports"
+NAT_DONE=0
+if ./nat.sh; then
+    NAT_DONE=1
+else
+    warn "Not everything was set. Run ./nat.sh again once the PBX is up, or set it in the panel"
+    warn "(Settings → Asterisk SIP Settings) — see item 2 below."
+fi
+
 # --- what is left for a person ---------------------------------------------
 
-step "Done — and three things only you can do"
+if [ "$NAT_DONE" = 1 ]; then
+    step "Done — and one thing only you can do"
+else
+    step "Done — and two things only you can do"
+fi
 cat <<'NEXT'
 
 1. OPEN THE PANEL and create the administrator account.
    The first person to open it becomes admin, so do this now, before the
    machine is reachable by anyone else.
+NEXT
 
-2. TELL ASTERISK ITS PUBLIC ADDRESS.
-   Settings → Asterisk SIP Settings → NAT Settings:
-     External Address  = this server's public IP
-     Local Networks    = the container network (docker network inspect)
-   Get this wrong and calls connect with silence in one direction. It is the
-   single most common fault in a PBX behind NAT.
+if [ "$NAT_DONE" != 1 ]; then
+    cat <<'NEXT'
 
-3. SET THE RTP RANGE TO MATCH.
-   Settings → Asterisk SIP Settings → RTP Port Ranges — the same numbers as
-   RTP_START and RTP_END in .env. `./doctor.sh` checks that they agree.
+2. TELL ASTERISK ITS PUBLIC ADDRESS AND ITS VOICE PORTS — ./nat.sh does both,
+   or in the panel: Settings → Asterisk SIP Settings →
+     NAT Settings:     External Address = this server's public IP
+     RTP Port Ranges:  the same numbers as RTP_START and RTP_END in .env
+   Get either wrong and calls connect with silence in one direction.
+NEXT
+fi
 
-Then add the provider's trunk and the extensions.
+cat <<'NEXT'
+
+Then add the provider's trunk and the extensions. A trunk that runs through the
+tunnel needs its own media address — see tunnel/README.md.
 
     ./doctor.sh          check the usual faults
+    ./nat.sh --check     the public address and voice ports Asterisk has now
     ./snapshot.sh        ⚠️ run this once it works — read the README first
 
 NEXT
