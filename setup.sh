@@ -108,6 +108,15 @@ if [ "${free_gb:-99}" -lt 12 ]; then
     warn "Only ${free_gb} GB free here. The install needs about 12 GB to be comfortable."
 fi
 
+# An installation already here is not something to set up again. Regenerating
+# .env puts PBX_IMAGE back to the build image and `up -d --build` rebuilds and
+# recreates the PBX from it — the software is gone while ./data still says
+# installed, and nothing reinstalls it. What people re-run setup for has its
+# own safe path.
+if [ -f data/persist/.freepbx-installed ]; then
+    die "FreePBX is already installed here. To change ports or files: edit .env, then ./apply.sh. To add a router tunnel: ./tunnel/listen.sh --net <network>. Nothing was changed."
+fi
+
 if [ -f .env ] || [ -f pbx.env ]; then
     warn "There is already a .env or pbx.env here."
     [ "$(ask 'Overwrite them?' 'no')" = "yes" ] || die "Nothing was changed."
@@ -145,6 +154,19 @@ TZ_GUESS=$(cat /etc/timezone 2>/dev/null || echo "UTC")
 PBX_TZ=$(ask "Time zone" "$TZ_GUESS" SETUP_TZ)
 PBX_DOMAIN=$(ask "Domain name for this PBX (any name; the installer needs one)" "local" SETUP_DOMAIN)
 
+# Every answer goes into a sed replacement below. A `/` in one of them — an
+# `https://` typed before a domain, say — made sed fail after the shell had
+# already emptied .env, and the next run then found "a .env already here".
+is_port() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+is_port "$PANEL_PORT" || die "The panel port is a number from 1 to 65535: $PANEL_PORT"
+is_port "$SIP_PORT"   || die "The SIP port is a number from 1 to 65535: $SIP_PORT"
+printf '%s' "$PANEL_BIND" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' \
+    || die "The panel address is an IPv4 address, like 127.0.0.1 or 0.0.0.0: $PANEL_BIND"
+printf '%s' "$PBX_DOMAIN" | grep -qE '^[A-Za-z0-9.-]+$' \
+    || die "A domain is a bare name like pbx.example.com — no https:// and no path: $PBX_DOMAIN"
+printf '%s' "$PBX_TZ" | grep -qE '^[A-Za-z0-9_+/-]+$' \
+    || die "Not a time zone name, like Asia/Tehran or UTC: $PBX_TZ"
+
 # shellcheck source=scripts/ports.sh
 . scripts/ports.sh
 
@@ -166,6 +188,8 @@ case "$ON_COOLIFY" in
         ON_COOLIFY=yes
         PANEL_DOMAIN=$(ask "Domain for the web panel, served with HTTPS by Coolify's proxy" "" SETUP_PANEL_DOMAIN)
         [ -n "$PANEL_DOMAIN" ] || die "On a Coolify server the panel needs a domain name to be reachable."
+        printf '%s' "$PANEL_DOMAIN" | grep -qE '^[A-Za-z0-9.-]+$' \
+            || die "A domain is a bare name like pbx.example.com — no https:// and no path: $PANEL_DOMAIN"
         ;;
     *) ON_COOLIFY=no ;;
 esac
@@ -191,7 +215,7 @@ case "$TUNNEL_MODE" in
         # The default is a port nobody here holds, found rather than assumed.
         suggested="$(free_tunnel_port || echo 1194)"
         TUNNEL_PORT=$(ask "Port the router dials in on (TCP)" "$suggested" SETUP_TUNNEL_PORT)
-        case "$TUNNEL_PORT" in ''|*[!0-9]*) die "That is not a port number: $TUNNEL_PORT" ;; esac
+        is_port "$TUNNEL_PORT" || die "That is not a port number: $TUNNEL_PORT"
         OPERATOR_NET=$(ask "The operator's network, as address/bits (e.g. 203.0.113.0/24)" "" SETUP_OPERATOR_NET)
         printf '%s' "$OPERATOR_NET" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$' \
             || die "Give the operator's network as address/bits, like 203.0.113.0/24."
@@ -240,11 +264,15 @@ sed -e "s/^RTP_START=.*/RTP_START=${RTP_START}/" \
     -e "s#^COMPOSE_FILE=.*#COMPOSE_FILE=${COMPOSE_FILES}#" \
     -e "s/^TUNNEL_PORT=.*/TUNNEL_PORT=${TUNNEL_PORT}/" \
     -e "s/^PANEL_DOMAIN=.*/PANEL_DOMAIN=${PANEL_DOMAIN}/" \
-    .env.example > .env
+    .env.example > .env.new
 
 sed -e "s/^PBX_DOMAIN=.*/PBX_DOMAIN=${PBX_DOMAIN}/" \
     -e "s#^TZ=.*#TZ=${PBX_TZ}#" \
-    pbx.env.example > pbx.env
+    pbx.env.example > pbx.env.new
+
+# Both written in full before either replaces what was there.
+mv .env.new .env
+mv pbx.env.new pbx.env
 
 say ""
 say "Wrote .env and pbx.env"

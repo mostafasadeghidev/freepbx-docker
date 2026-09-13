@@ -44,3 +44,7 @@ Thumbs.db
 # Infrastructure detail: server address, ports, network layout. This repo is
 # public; read it before deciding to publish this one.
 TUNNEL.md*
+
+# setup.sh writes these first and moves them into place.
+.env.new
+pbx.env.new

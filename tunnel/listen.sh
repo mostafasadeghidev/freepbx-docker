@@ -58,19 +58,27 @@ printf '%s' "$USER_NAME" | grep -qE '^[a-z][a-z0-9_-]{0,31}$' \
 
 # shellcheck source=../scripts/ports.sh
 . scripts/ports.sh
+# shellcheck source=../scripts/recreate.sh
+. scripts/recreate.sh
 
 if [ "$WRITE_ONLY" = 0 ]; then
     [ -f .env ] || die "No .env here. Run ./setup.sh first."
 
-    # The one check that decides whether this is safe at all — see the top.
-    # Read whole, then searched: `docker diff | grep -q` under pipefail reports
-    # a match as a failure when grep stops reading and docker gets SIGPIPE.
-    container_diff="$(docker diff freepbx 2>/dev/null || true)"
-    if grep -qx 'A /usr/sbin/fwconsole' <<<"$container_diff"; then
-        die "The install still lives only inside the container, and adding a port recreates it. Run ./snapshot.sh first — nothing was changed."
+    # The one check that decides whether this is safe at all — see the top and
+    # scripts/recreate.sh. Not the diff alone: straight after setup.sh the
+    # container still runs the build image while .env already names the
+    # snapshot, and refusing that would refuse every fresh install.
+    if recreate_erases_install; then
+        die "The install still lives only inside the container, and adding a port recreates it from an image without it. Run ./snapshot.sh and set PBX_IMAGE=freepbx17-official:installed in .env — nothing was changed."
     fi
 fi
 
+if [ -z "$PORT" ] && [ -f tunnel/server.conf ]; then
+    # The port OpenVPN already listens on wins: a router is set to it. An .env
+    # older than COMPOSE_FILE says nothing about the tunnel, and guessing a
+    # "free" port there would move the tunnel out from under that router.
+    PORT="$(sed -n 's/^port \([0-9][0-9]*\).*/\1/p' tunnel/server.conf | tail -n 1)"
+fi
 if [ -z "$PORT" ]; then
     PORT="$(sed -n 's/^TUNNEL_PORT=//p' .env 2>/dev/null | tail -n 1)"
     # A port in .env from a machine that never listened is only a default.
@@ -82,6 +90,56 @@ if [ -z "$PORT" ]; then
 fi
 case "$PORT" in ''|*[!0-9]*) die "That is not a port number: $PORT" ;; esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "That is not a port number: $PORT"
+
+# OpenVPN wants a netmask, people write /bits.
+net_addr=${NET%/*}
+net_bits=${NET#*/}
+mask=""
+b=$net_bits
+for _ in 1 2 3 4; do
+    if [ "$b" -ge 8 ]; then oct=255; b=$((b - 8)); else oct=$(( 256 - (1 << (8 - b)) )); [ "$b" -eq 0 ] && oct=0; b=0; fi
+    mask="${mask:+$mask.}$oct"
+done
+
+# The network, not an address in it. The kernel refuses a route whose address
+# has host bits set, and OpenVPN logs that and carries on — the tunnel comes up
+# and the operator is never reached. Somebody who types the SIP server's own
+# address, 203.0.113.7/24, means 203.0.113.0/24.
+IFS=. read -r o1 o2 o3 o4 <<<"$net_addr"
+IFS=. read -r m1 m2 m3 m4 <<<"$mask"
+for o in "$o1" "$o2" "$o3" "$o4"; do
+    [ "$o" -le 255 ] || die "Give the operator's network as address/bits, like 203.0.113.0/24."
+done
+net_addr="$((o1 & m1)).$((o2 & m2)).$((o3 & m3)).$((o4 & m4))"
+
+# --- before anything is written: would the change even start? ---------------
+#
+# The same port check apply.sh makes, asked with the values this run is about
+# to write. Asked after writing, a refused port left server.conf and .env
+# pointing at it while the running tunnel still published the old one — and
+# the next restart moved OpenVPN away from the router.
+if [ "$WRITE_ONLY" = 0 ]; then
+    files="$(sed -n 's/^COMPOSE_FILE=//p' .env | tail -n 1)"
+    if [ -z "$files" ]; then
+        # An .env older than COMPOSE_FILE. The running container remembers which
+        # files made it, so the Coolify override is not silently dropped.
+        files="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' freepbx 2>/dev/null \
+            | tr ',' '\n' | sed 's#.*/##' | grep -v '^$' | paste -sd: - || true)"
+        [ -n "$files" ] || files="compose.yml"
+    fi
+    case ":$files:" in
+        *:compose.tunnel-server.yml:*) ;;
+        *) files="$files:compose.tunnel-server.yml" ;;
+    esac
+
+    if ! clashes="$(set -a; . ./.env; set +a; TUNNEL_PORT="$PORT" COMPOSE_FILE="$files"; kit_wanted_ports | ports_conflicts)"; then
+        printf '%s\n' "$clashes" | while read -r label proto port who; do
+            printf '✗  %s %s/%s is already held by %s\n' "$label" "$port" "$proto" "${who#*:}" >&2
+        done
+        if alt="$(free_tunnel_port)"; then say "   $alt/tcp is free here: run again with --port $alt"; fi
+        die "Nothing was changed."
+    fi
+fi
 
 # --- the files --------------------------------------------------------------
 
@@ -99,16 +157,6 @@ if [ -z "$PASS" ] || [ "$NEW_PASSWORD" = 1 ]; then
     chmod 600 tunnel/users.new
     mv tunnel/users.new tunnel/users
 fi
-
-# OpenVPN wants a netmask, people write /bits.
-net_addr=${NET%/*}
-net_bits=${NET#*/}
-mask=""
-b=$net_bits
-for _ in 1 2 3 4; do
-    if [ "$b" -ge 8 ]; then oct=255; b=$((b - 8)); else oct=$(( 256 - (1 << (8 - b)) )); [ "$b" -eq 0 ] && oct=0; b=0; fi
-    mask="${mask:+$mask.}$oct"
-done
 
 conf_before="$(cat tunnel/server.conf 2>/dev/null || true)"
 if [ ! -f tunnel/server.conf ]; then
@@ -136,19 +184,6 @@ if [ "$WRITE_ONLY" = 1 ]; then
 fi
 
 # --- .env: the port, and the file that publishes it -------------------------
-
-files="$(sed -n 's/^COMPOSE_FILE=//p' .env | tail -n 1)"
-if [ -z "$files" ]; then
-    # An .env older than COMPOSE_FILE. The running container remembers which
-    # files made it, so the Coolify override is not silently dropped.
-    files="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' freepbx 2>/dev/null \
-        | tr ',' '\n' | sed 's#.*/##' | grep -v '^$' | paste -sd: - || true)"
-    [ -n "$files" ] || files="compose.yml"
-fi
-case ":$files:" in
-    *:compose.tunnel-server.yml:*) ;;
-    *) files="$files:compose.tunnel-server.yml" ;;
-esac
 
 set_env() {
     if grep -q "^$1=" .env; then
@@ -178,7 +213,9 @@ port_hex="$(printf '%04X' "$PORT")"
 say "Waiting for OpenVPN to listen…"
 ready=0
 for _ in $(seq 1 40); do
-    if docker exec freepbx cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+    # tcp6 is absent on a kernel booted with ipv6.disable=1, and under pipefail
+    # cat's complaint about it would fail the check even when tcp matched.
+    if docker exec freepbx sh -c 'cat /proc/net/tcp; cat /proc/net/tcp6 2>/dev/null; true' \
         | awk -v p="$port_hex" '{ n = split($2, a, ":"); if (a[n] == p && $4 == "0A") f = 1 } END { exit !f }'; then
         ready=1
         break

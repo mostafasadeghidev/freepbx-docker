@@ -42,14 +42,33 @@ _held_ports() {
 
     # Everything else. docker-proxy lines are skipped because the loop above has
     # already named every container binding properly.
-    ss -Hlntup 2>/dev/null | awk '
+    #
+    # Skipping by name is not enough without root: `ss -p` names only processes
+    # the caller may inspect, so for a docker-group user the root-owned
+    # docker-proxy sockets — this kit's own SIP and voice ports among them —
+    # come back nameless and would read as "held by ?" on every running
+    # install. A nameless socket on a port some container publishes is that
+    # container's proxy; a named process, or a nameless one on a port no
+    # container publishes, is still somebody else.
+    ss -Hlntup 2>/dev/null | awk -v bound=" $(_container_bound) " '
         $0 ~ /docker-proxy/ { next }
         {
             proto = $1; addr = $5; sub(/.*:/, "", addr)
             prog = $0
             if (prog ~ /users:\(\("/) { sub(/.*users:\(\("/, "", prog); sub(/".*/, "", prog) } else prog = "?"
+            if (prog == "?" && index(bound, " " proto ":" addr " ")) next
             if (addr ~ /^[0-9]+$/) print proto, addr, addr, "process:" prog
         }'
+}
+
+# "proto:port" for every host port any running container publishes, this kit's
+# included, ranges expanded.
+_container_bound() {
+    docker ps --format '{{.Ports}}' 2>/dev/null | tr ',' '\n' \
+        | sed -nE 's/^ *[^ ]*:([0-9]+)(-([0-9]+))?->[0-9-]+\/(tcp|udp) *$/\4 \1 \3/p' \
+        | while read -r proto from to; do
+            for p in $(seq "$from" "${to:-$from}"); do printf '%s:%s ' "$proto" "$p"; done
+        done
 }
 
 # Reads wanted ranges on stdin, one per line: "<label> <proto> <from> <to>".

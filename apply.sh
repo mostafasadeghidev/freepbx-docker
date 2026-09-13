@@ -26,10 +26,25 @@ CHECK_ONLY=0
 
 # shellcheck source=scripts/ports.sh
 . scripts/ports.sh
+# shellcheck source=scripts/recreate.sh
+. scripts/recreate.sh
 set -a
 # shellcheck disable=SC1091
 . ./.env
 set +a
+
+# An .env older than COMPOSE_FILE: a bare `up -d` would load compose.yml alone
+# and recreate the PBX without its tunnel port and Coolify network. The running
+# container remembers which files made it, so ask it, and write the answer down.
+if [ -z "${COMPOSE_FILE:-}" ]; then
+    COMPOSE_FILE="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' freepbx 2>/dev/null \
+        | tr ',' '\n' | sed 's#.*/##' | grep -v '^$' | paste -sd: - || true)"
+    export COMPOSE_FILE="${COMPOSE_FILE:-compose.yml}"
+    if [ "$CHECK_ONLY" = 0 ]; then
+        printf 'COMPOSE_FILE=%s\n' "$COMPOSE_FILE" >> .env
+        echo "(.env had no COMPOSE_FILE; wrote the files the running PBX was made from: $COMPOSE_FILE)"
+    fi
+fi
 
 echo "Checking the ports .env asks for…"
 if ! conflicts="$(kit_wanted_ports | ports_conflicts)"; then
@@ -49,6 +64,22 @@ if ! conflicts="$(kit_wanted_ports | ports_conflicts)"; then
     exit 1
 fi
 echo "✓ No clashes."
+
+# The other way a recreate takes the PBX down — see scripts/recreate.sh.
+echo "Checking that a recreate keeps the installation…"
+if recreate_erases_install; then
+    echo
+    echo "✗ FreePBX exists only inside the running container, and a recreate would"
+    echo "  start from an image without it — erasing the install while ./data still"
+    echo "  says installed. Take the snapshot first:"
+    echo
+    echo "      ./snapshot.sh"
+    echo "      sed -i 's#^PBX_IMAGE=.*#PBX_IMAGE=freepbx17-official:installed#' .env"
+    echo
+    echo "Nothing was changed, and the running system was not touched."
+    exit 1
+fi
+echo "✓ A recreate starts from an image that has the installation (or there is none yet)."
 
 [ "$CHECK_ONLY" = 1 ] && exit 0
 
