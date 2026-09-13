@@ -15,6 +15,21 @@
 #     ./setup.sh --yes        take every default, ask nothing
 #     ./setup.sh --show       print what it would write, change nothing
 #     ./setup.sh --prepare    write the files and check the ports, start nothing
+#
+# ## Answering without a keyboard
+#
+# Every question can be answered in the environment instead, which is how a
+# tool installs this without guessing the order of the questions:
+#
+#     SETUP_EXTENSIONS=50 SETUP_TUNNEL=listen SETUP_OPERATOR_NET=203.0.113.0/24 \
+#       ./setup.sh --yes
+#
+#   SETUP_EXTENSIONS    SETUP_PANEL_BIND   SETUP_PANEL_PORT   SETUP_SIP_PORT
+#   SETUP_TZ            SETUP_DOMAIN       SETUP_COOLIFY      SETUP_PANEL_DOMAIN
+#   SETUP_TUNNEL        SETUP_TUNNEL_PORT  SETUP_OPERATOR_NET
+#
+# A variable that is set answers its question; one that is not falls back to
+# the keyboard, or with --yes to the default. Every answer is still validated.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -47,7 +62,13 @@ die()  { printf '\033[31m✗  %s\033[0m\n' "$*" >&2; exit 1; }
 #
 # The prompt goes to stderr so that stdout carries the answer and nothing else.
 ask() {
-    local prompt="$1" default="$2" reply=""
+    local prompt="$1" default="$2" var="${3:-}" reply=""
+    # An answer given in the environment wins over both the keyboard and the
+    # default — see "Answering without a keyboard" at the top.
+    if [ -n "$var" ] && [ -n "${!var+x}" ]; then
+        printf '%s\n' "${!var}"
+        return
+    fi
     if [ "$ASSUME_YES" = 1 ]; then
         printf '%s\n' "$default"
         return
@@ -98,7 +119,7 @@ step "A few questions"
 say "Enter accepts the default. Nothing here is final — .env can be edited later."
 say ""
 
-EXTENSIONS=$(ask "How many extensions (telephones) will this serve?" "20")
+EXTENSIONS=$(ask "How many extensions (telephones) will this serve?" "20" SETUP_EXTENSIONS)
 case "$EXTENSIONS" in
     ''|*[!0-9]*) die "That is not a number: $EXTENSIONS" ;;
 esac
@@ -115,14 +136,14 @@ say ""
 say "The web panel. Leave it on 127.0.0.1 if anything else on this machine"
 say "already serves HTTPS (Caddy, Nginx, Traefik, Coolify) — that proxy puts"
 say "it on a domain. Answer 0.0.0.0 only to reach it directly, without HTTPS."
-PANEL_BIND=$(ask "Publish the panel on which address?" "127.0.0.1")
-PANEL_PORT=$(ask "On which port?" "8088")
+PANEL_BIND=$(ask "Publish the panel on which address?" "127.0.0.1" SETUP_PANEL_BIND)
+PANEL_PORT=$(ask "On which port?" "8088" SETUP_PANEL_PORT)
 
 say ""
-SIP_PORT=$(ask "SIP port (the one telephones register to)" "5060")
+SIP_PORT=$(ask "SIP port (the one telephones register to)" "5060" SETUP_SIP_PORT)
 TZ_GUESS=$(cat /etc/timezone 2>/dev/null || echo "UTC")
-PBX_TZ=$(ask "Time zone" "$TZ_GUESS")
-PBX_DOMAIN=$(ask "Domain name for this PBX (any name; the installer needs one)" "local")
+PBX_TZ=$(ask "Time zone" "$TZ_GUESS" SETUP_TZ)
+PBX_DOMAIN=$(ask "Domain name for this PBX (any name; the installer needs one)" "local" SETUP_DOMAIN)
 
 # shellcheck source=scripts/ports.sh
 . scripts/ports.sh
@@ -138,12 +159,12 @@ COOLIFY_GUESS=no
 docker ps --format '{{.Names}}' 2>/dev/null | grep -qx coolify-proxy && COOLIFY_GUESS=yes
 say ""
 say "Coolify's proxy owns ports 80 and 443 wherever it runs."
-ON_COOLIFY=$(ask "Is Coolify running on this server?" "$COOLIFY_GUESS")
+ON_COOLIFY=$(ask "Is Coolify running on this server?" "$COOLIFY_GUESS" SETUP_COOLIFY)
 PANEL_DOMAIN=""
 case "$ON_COOLIFY" in
     y|yes|Y|YES)
         ON_COOLIFY=yes
-        PANEL_DOMAIN=$(ask "Domain for the web panel, served with HTTPS by Coolify's proxy" "")
+        PANEL_DOMAIN=$(ask "Domain for the web panel, served with HTTPS by Coolify's proxy" "" SETUP_PANEL_DOMAIN)
         [ -n "$PANEL_DOMAIN" ] || die "On a Coolify server the panel needs a domain name to be reachable."
         ;;
     *) ON_COOLIFY=no ;;
@@ -161,7 +182,7 @@ say "A tunnel is only for a PBX abroad whose telephone provider will only talk"
 say "to an address inside its own country. Most installations answer none."
 say "  listen   a router over there dials in to this server   (the usual case)"
 say "  dial     this server dials out to something with a public address"
-TUNNEL_MODE=$(ask "Tunnel: none, listen or dial" "none")
+TUNNEL_MODE=$(ask "Tunnel: none, listen or dial" "none" SETUP_TUNNEL)
 PROFILES=""
 TUNNEL_PORT=1194
 OPERATOR_NET=""
@@ -169,9 +190,9 @@ case "$TUNNEL_MODE" in
     listen)
         # The default is a port nobody here holds, found rather than assumed.
         suggested="$(free_tunnel_port || echo 1194)"
-        TUNNEL_PORT=$(ask "Port the router dials in on (TCP)" "$suggested")
+        TUNNEL_PORT=$(ask "Port the router dials in on (TCP)" "$suggested" SETUP_TUNNEL_PORT)
         case "$TUNNEL_PORT" in ''|*[!0-9]*) die "That is not a port number: $TUNNEL_PORT" ;; esac
-        OPERATOR_NET=$(ask "The operator's network, as address/bits (e.g. 203.0.113.0/24)" "")
+        OPERATOR_NET=$(ask "The operator's network, as address/bits (e.g. 203.0.113.0/24)" "" SETUP_OPERATOR_NET)
         printf '%s' "$OPERATOR_NET" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$' \
             || die "Give the operator's network as address/bits, like 203.0.113.0/24."
         ;;
@@ -238,32 +259,10 @@ fi
 TUNNEL_PASS=""
 if [ "$TUNNEL_MODE" = listen ]; then
     step "Preparing the tunnel"
-    [ -f tunnel/pki/ca.crt ] || ./tunnel/make-server-pki.sh >/dev/null
-
-    # A password nobody chose, in a file git never sees.
-    TUNNEL_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
-    printf 'router:%s\n' "$TUNNEL_PASS" > tunnel/users
-    chmod 600 tunnel/users
-
-    # OpenVPN wants a netmask, people write /bits.
-    net_addr=${OPERATOR_NET%/*}
-    net_bits=${OPERATOR_NET#*/}
-    mask=""
-    b=$net_bits
-    for _ in 1 2 3 4; do
-        if [ "$b" -ge 8 ]; then oct=255; b=$((b - 8)); else oct=$(( 256 - (1 << (8 - b)) )); [ "$b" -eq 0 ] && oct=0; b=0; fi
-        mask="${mask:+$mask.}$oct"
-    done
-
-    # Both halves of the trap in one place: `route` for this machine and
-    # `iroute` for OpenVPN. Without the iroute every packet for the operator
-    # is dropped without a log line — see tunnel/README.md.
-    sed -e "s/^port .*/port ${TUNNEL_PORT}/" \
-        -e "s/^route .*/route ${net_addr} ${mask}/" \
-        tunnel/server.conf.example > tunnel/server.conf
-    mkdir -p tunnel/ccd
-    printf 'iroute %s %s\n' "$net_addr" "$mask" > tunnel/ccd/router
-    say "Tunnel server: port ${TUNNEL_PORT}/tcp, operator network ${net_addr} ${mask}"
+    # The same script that adds a tunnel to a running installation, so the two
+    # paths cannot drift apart. It keeps a password that already exists.
+    ./tunnel/listen.sh --write-only --net "$OPERATOR_NET" --port "$TUNNEL_PORT" --user router
+    TUNNEL_PASS="$(awk -F: '$1 == "router" { sub(/^[^:]*:/, ""); print; exit }' tunnel/users)"
 fi
 
 # --- nothing starts until nothing clashes ----------------------------------

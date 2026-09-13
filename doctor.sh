@@ -79,7 +79,15 @@ fi
 
 head_ "NAT — the reason one side hears nothing"
 
-ext_ip=$(dex asterisk -rx 'pjsip show settings' | grep -i 'external_media_address' | head -1 | awk '{print $NF}')
+# Read off the transport, not `pjsip show settings` — that command has no
+# external_media_address field at all, so the first version of this check said
+# "not set" on every system, configured or not. Measured on one machine: empty,
+# then set through FreePBX and reloaded, then read back from the transport.
+ext_ip=""
+for t in $(dex asterisk -rx 'pjsip show transports' | awk '/^Transport:/ && $2 !~ /^</ {print $2}'); do
+    v=$(dex asterisk -rx "pjsip show transport $t" | awk -F': *' '/external_media_address/ {print $2; exit}' | tr -d ' \r')
+    if [ -n "$v" ]; then ext_ip="$v"; break; fi
+done
 if [ -n "${ext_ip:-}" ] && [ "$ext_ip" != "(null)" ] && [ "$ext_ip" != "0.0.0.0" ]; then
     ok "Asterisk knows an external address: $ext_ip"
 else

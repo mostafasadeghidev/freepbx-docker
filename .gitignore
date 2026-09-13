@@ -28,6 +28,9 @@ data/
 # Logs quote configuration and can quote credentials with it.
 *.log
 
+# What a detached install leaves beside the kit: its pid and its exit code.
+.zana-install.*
+
 # Local settings for the development tool, not part of the project.
 .claude/
 
