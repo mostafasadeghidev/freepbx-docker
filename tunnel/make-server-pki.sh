@@ -30,7 +30,11 @@ fi
 
 mkdir -p "$PKI"
 
-docker run --rm -v "$PKI:/pki" alpine:3.20 sh -s <<EOF
+# `-i` is not optional. Without it `docker run` does not connect stdin, `sh -s`
+# reads an empty script, and the container exits 0 having made nothing. The
+# first version shipped like that: "Wrote:" followed by an empty folder, and a
+# setup that went on to configure a tunnel with no certificate behind it.
+docker run --rm -i -v "$PKI:/pki" alpine:3.20 sh -s <<EOF
 set -e
 apk add -q openssl
 cd /pki
@@ -46,6 +50,14 @@ rm -f server.csr ext.cnf
 chmod 600 ca.key server.key
 chmod 644 ca.crt server.crt
 EOF
+
+# A CA that was never made must not look like success.
+for f in ca.crt ca.key server.crt server.key; do
+    if [ ! -s "$PKI/$f" ]; then
+        echo "✗ $f was not created — the certificates are incomplete." >&2
+        exit 1
+    fi
+done
 
 echo
 echo "Wrote:"

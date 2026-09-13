@@ -127,6 +127,34 @@ else
     note "docker compose up -d   after changing the range in .env"
 fi
 
+# --- ports somebody else holds ----------------------------------------------
+#
+# The check apply.sh enforces, reported here. It matters most after .env was
+# edited and before it was applied: a clash found now is a warning, a clash
+# found by `docker compose up -d` is a PBX that is down. Measured on a Coolify
+# machine with TUNNEL_PORT=443 — the container was recreated and never started.
+
+head_ "Ports in .env against everything else on this machine"
+
+if [ -f scripts/ports.sh ] && [ -f .env ]; then
+    # shellcheck source=scripts/ports.sh
+    . scripts/ports.sh
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+    if clashes="$(kit_wanted_ports | ports_conflicts)"; then
+        ok "nothing else holds a port this installation publishes"
+    else
+        printf '%s\n' "$clashes" | while read -r label proto port who; do
+            bad "$label $port/$proto is held by ${who#*:}"
+        done
+        note "Change it in .env, then ./apply.sh — which checks before it touches anything."
+    fi
+else
+    hmm "cannot check: scripts/ports.sh or .env is missing"
+fi
+
 # --- the module that breaks the machine it protects -------------------------
 
 head_ "The FreePBX firewall module"
@@ -181,7 +209,8 @@ head_ "If this server disappeared tonight"
 #
 # Measured while testing this kit: applying one compose override was enough.
 # `Failed to start mariadb.service: Unit mariadb.service not found.`
-env_image=$(grep -E '^PBX_IMAGE=' .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
+env_image=$(grep -E '^PBX_IMAGE=' .env 2>/dev/null | cut -d= -f2 | tr -d ' 
+')
 if ! docker image inspect freepbx17-official:installed >/dev/null 2>&1; then
     bad "No snapshot image — this install is one 'docker compose up -d' from gone."
     note "Run ./snapshot.sh, then set PBX_IMAGE=freepbx17-official:installed in .env."

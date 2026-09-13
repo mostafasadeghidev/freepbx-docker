@@ -14,6 +14,7 @@
 #     ./setup.sh              ask, then install
 #     ./setup.sh --yes        take every default, ask nothing
 #     ./setup.sh --show       print what it would write, change nothing
+#     ./setup.sh --prepare    write the files and check the ports, start nothing
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -21,10 +22,12 @@ cd "$(dirname "$0")"
 
 ASSUME_YES=0
 DRY_RUN=0
+PREPARE_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         -y|--yes)  ASSUME_YES=1 ;;
         -n|--show) DRY_RUN=1 ;;
+        -p|--prepare) PREPARE_ONLY=1 ;;
         -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
@@ -121,14 +124,68 @@ TZ_GUESS=$(cat /etc/timezone 2>/dev/null || echo "UTC")
 PBX_TZ=$(ask "Time zone" "$TZ_GUESS")
 PBX_DOMAIN=$(ask "Domain name for this PBX (any name; the installer needs one)" "local")
 
+# shellcheck source=scripts/ports.sh
+. scripts/ports.sh
+
+# --- Coolify ----------------------------------------------------------------
+#
+# Asked, with the answer guessed from what is running: Coolify's proxy is a
+# container called coolify-proxy, and it holds 80, 443 and 443/udp. On such a
+# machine the panel has to join Coolify's network to be reachable by its
+# proxy at all — measured: a panel on 127.0.0.1 answers "Connection refused"
+# from inside that proxy — and the tunnel must stay off 443.
+COOLIFY_GUESS=no
+docker ps --format '{{.Names}}' 2>/dev/null | grep -qx coolify-proxy && COOLIFY_GUESS=yes
 say ""
-say "A tunnel is only for a PBX abroad whose telephone provider will not talk"
-say "to a foreign address. If that is not your situation, answer no."
-WANT_TUNNEL=$(ask "Use a tunnel?" "no")
-PROFILES=""
-case "$WANT_TUNNEL" in
-    y|yes|Y|YES) PROFILES="tunnel" ;;
+say "Coolify's proxy owns ports 80 and 443 wherever it runs."
+ON_COOLIFY=$(ask "Is Coolify running on this server?" "$COOLIFY_GUESS")
+PANEL_DOMAIN=""
+case "$ON_COOLIFY" in
+    y|yes|Y|YES)
+        ON_COOLIFY=yes
+        PANEL_DOMAIN=$(ask "Domain for the web panel, served with HTTPS by Coolify's proxy" "")
+        [ -n "$PANEL_DOMAIN" ] || die "On a Coolify server the panel needs a domain name to be reachable."
+        ;;
+    *) ON_COOLIFY=no ;;
 esac
+
+# --- the tunnel -------------------------------------------------------------
+#
+# Two directions, and the right one depends on the far end, not on this
+# server. A router on an office line or a SIM sits behind its provider's NAT —
+# measured on a real one: both lines in 100.64.0.0/10 — so nothing can dial in
+# to it, and this server has to be the one that listens. "dial" is only for a
+# far end with a public address that handed you an .ovpn file.
+say ""
+say "A tunnel is only for a PBX abroad whose telephone provider will only talk"
+say "to an address inside its own country. Most installations answer none."
+say "  listen   a router over there dials in to this server   (the usual case)"
+say "  dial     this server dials out to something with a public address"
+TUNNEL_MODE=$(ask "Tunnel: none, listen or dial" "none")
+PROFILES=""
+TUNNEL_PORT=1194
+OPERATOR_NET=""
+case "$TUNNEL_MODE" in
+    listen)
+        # The default is a port nobody here holds, found rather than assumed.
+        suggested="$(free_tunnel_port || echo 1194)"
+        TUNNEL_PORT=$(ask "Port the router dials in on (TCP)" "$suggested")
+        case "$TUNNEL_PORT" in ''|*[!0-9]*) die "That is not a port number: $TUNNEL_PORT" ;; esac
+        OPERATOR_NET=$(ask "The operator's network, as address/bits (e.g. 203.0.113.0/24)" "")
+        printf '%s' "$OPERATOR_NET" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$' \
+            || die "Give the operator's network as address/bits, like 203.0.113.0/24."
+        ;;
+    dial) PROFILES="tunnel" ;;
+    *) TUNNEL_MODE=none ;;
+esac
+
+# Which compose files make up this installation, written into .env so that a
+# plain `docker compose …` — by a person, by doctor.sh, or by any tool that
+# reads the project — always uses the whole set. Leaving one out is not
+# harmless: `up -d` without the tunnel file removes the tunnel.
+COMPOSE_FILES="compose.yml"
+[ "$ON_COOLIFY" = yes ] && COMPOSE_FILES="$COMPOSE_FILES:compose.coolify.yml"
+[ "$TUNNEL_MODE" = listen ] && COMPOSE_FILES="$COMPOSE_FILES:compose.tunnel-server.yml"
 
 # --- write it down ----------------------------------------------------------
 
@@ -137,7 +194,13 @@ printf '  extensions   %s  (RTP %s-%s, %s ports)\n' "$EXTENSIONS" "$RTP_START" "
 printf '  panel        %s:%s\n' "$PANEL_BIND" "$PANEL_PORT"
 printf '  SIP          %s\n' "$SIP_PORT"
 printf '  time zone    %s\n' "$PBX_TZ"
-printf '  tunnel       %s\n' "${PROFILES:-no}"
+printf '  coolify      %s%s\n' "$ON_COOLIFY" "${PANEL_DOMAIN:+  (panel on https://$PANEL_DOMAIN)}"
+case "$TUNNEL_MODE" in
+    listen) printf '  tunnel       listen on %s/tcp, operator network %s\n' "$TUNNEL_PORT" "$OPERATOR_NET" ;;
+    dial)   printf '  tunnel       dial out (tunnel/client.ovpn)\n' ;;
+    *)      printf '  tunnel       none\n' ;;
+esac
+printf '  files        %s\n' "$COMPOSE_FILES"
 
 if [ "$DRY_RUN" = 1 ]; then
     say ""
@@ -153,6 +216,9 @@ sed -e "s/^RTP_START=.*/RTP_START=${RTP_START}/" \
     -e "s/^PANEL_PORT=.*/PANEL_PORT=${PANEL_PORT}/" \
     -e "s/^SIP_PORT=.*/SIP_PORT=${SIP_PORT}/" \
     -e "s/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=${PROFILES}/" \
+    -e "s#^COMPOSE_FILE=.*#COMPOSE_FILE=${COMPOSE_FILES}#" \
+    -e "s/^TUNNEL_PORT=.*/TUNNEL_PORT=${TUNNEL_PORT}/" \
+    -e "s/^PANEL_DOMAIN=.*/PANEL_DOMAIN=${PANEL_DOMAIN}/" \
     .env.example > .env
 
 sed -e "s/^PBX_DOMAIN=.*/PBX_DOMAIN=${PBX_DOMAIN}/" \
@@ -162,9 +228,67 @@ sed -e "s/^PBX_DOMAIN=.*/PBX_DOMAIN=${PBX_DOMAIN}/" \
 say ""
 say "Wrote .env and pbx.env"
 
-if [ "$PROFILES" = "tunnel" ] && [ ! -f tunnel/client.ovpn ]; then
+if [ "$TUNNEL_MODE" = dial ] && [ ! -f tunnel/client.ovpn ]; then
     warn "The tunnel is on but tunnel/client.ovpn is missing."
     warn "Put your provider's .ovpn file there before the PBX needs it — see tunnel/README.md."
+fi
+
+# --- the listening end, made rather than described -------------------------
+
+TUNNEL_PASS=""
+if [ "$TUNNEL_MODE" = listen ]; then
+    step "Preparing the tunnel"
+    [ -f tunnel/pki/ca.crt ] || ./tunnel/make-server-pki.sh >/dev/null
+
+    # A password nobody chose, in a file git never sees.
+    TUNNEL_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
+    printf 'router:%s\n' "$TUNNEL_PASS" > tunnel/users
+    chmod 600 tunnel/users
+
+    # OpenVPN wants a netmask, people write /bits.
+    net_addr=${OPERATOR_NET%/*}
+    net_bits=${OPERATOR_NET#*/}
+    mask=""
+    b=$net_bits
+    for _ in 1 2 3 4; do
+        if [ "$b" -ge 8 ]; then oct=255; b=$((b - 8)); else oct=$(( 256 - (1 << (8 - b)) )); [ "$b" -eq 0 ] && oct=0; b=0; fi
+        mask="${mask:+$mask.}$oct"
+    done
+
+    # Both halves of the trap in one place: `route` for this machine and
+    # `iroute` for OpenVPN. Without the iroute every packet for the operator
+    # is dropped without a log line — see tunnel/README.md.
+    sed -e "s/^port .*/port ${TUNNEL_PORT}/" \
+        -e "s/^route .*/route ${net_addr} ${mask}/" \
+        tunnel/server.conf.example > tunnel/server.conf
+    mkdir -p tunnel/ccd
+    printf 'iroute %s %s\n' "$net_addr" "$mask" > tunnel/ccd/router
+    say "Tunnel server: port ${TUNNEL_PORT}/tcp, operator network ${net_addr} ${mask}"
+fi
+
+# --- nothing starts until nothing clashes ----------------------------------
+#
+# Checked before `up`, not discovered by it. Measured on a Coolify machine: a
+# port that is already held makes compose recreate the telephone container and
+# then fail to start the new one — the system goes down and stays down. See
+# scripts/ports.sh.
+step "Checking ports"
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+if ! conflicts="$(kit_wanted_ports | ports_conflicts)"; then
+    printf '%s\n' "$conflicts" | while read -r label proto port who; do
+        warn "$label $port/$proto is already held by ${who#*:}"
+    done
+    die "Change those in .env, then run ./apply.sh. Nothing was started."
+fi
+say "No clashes."
+
+if [ "$PREPARE_ONLY" = 1 ]; then
+    say ""
+    say "--prepare: everything is written and the ports are free. Start it with ./apply.sh"
+    exit 0
 fi
 
 # --- build and start --------------------------------------------------------
@@ -278,4 +402,24 @@ Then add the provider's trunk and the extensions.
     ./snapshot.sh        ⚠️ run this once it works — read the README first
 
 NEXT
+
+# The router's half, with the real values — printed once, because the password
+# was generated here and exists nowhere else but tunnel/users.
+if [ "$TUNNEL_MODE" = listen ]; then
+    public_ip=$(curl -fsS -m 8 https://api.ipify.org 2>/dev/null || echo ADDRESS-OF-THIS-SERVER)
+    cat <<ROUTER
+THE ROUTER'S HALF OF THE TUNNEL — paste into its terminal (RouterOS 7):
+
+    /interface ovpn-client add name=ovpn-pbx connect-to=${public_ip} port=${TUNNEL_PORT} \\
+      protocol=tcp mode=ip user=router password=${TUNNEL_PASS} \\
+      certificate=none verify-server-certificate=no auth=sha1 cipher=aes256-cbc \\
+      add-default-route=no
+
+  The password is also in tunnel/users. This is the only time it is printed.
+  If the operator only accepts one of the router's lines, see tunnel/README.md
+  for the three lines that send its traffic out of that one.
+
+ROUTER
+fi
+
 docker compose ps
