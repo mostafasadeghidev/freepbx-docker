@@ -17,12 +17,35 @@
 #   8001/tcp, 8003/tcp  UCP (node)
 #   4569/udp            IAX2
 #   69/udp              TFTP phone provisioning
+#
+# ## Kept in step with compose.yml where the reason is the same
+#
+# The snapshot matters here exactly as much: the installer writes FreePBX into
+# the container's own filesystem, and a recreate from the build image erases
+# it. This file used to name `freepbx17-official:local` outright, so the
+# snapshot could never be used with it. It reads PBX_IMAGE now — put
+# `PBX_IMAGE=freepbx17-official:installed` in .env after ./snapshot.sh, the
+# same line as the bridge version, and never run `docker compose build` or
+# `up -d --build` after an install (see the comment in compose.yml).
+#
+# One thing from compose.yml is deliberately NOT here: the resolv.conf mount.
+# It works around Docker's embedded resolver at 127.0.0.11, which a
+# host-network container does not use — it reads the host's own settings.
+#
+# And one matters more here than there: with host networking the FreePBX
+# firewall module would rewrite the HOST's firewall, SSH included.
+# `PBX_FIREWALL=off`, the default in pbx.env, keeps it disabled on every boot.
+# Leave it off.
+#
+# setup.sh, apply.sh, nat.sh and tunnel/listen.sh are written for compose.yml.
+# With this file the install is the manual one in the README. Not tested with
+# the kit's scripts; the bridge version is the one that was measured.
 # ---------------------------------------------------------------------------
 services:
   freepbx:
     build:
       context: .
-    image: freepbx17-official:local
+    image: ${PBX_IMAGE:-freepbx17-official:local}
     container_name: freepbx
     restart: unless-stopped
 
@@ -32,12 +55,24 @@ services:
 
     network_mode: host
 
+    # The same two questions as compose.yml: can it resolve a name, and is
+    # Asterisk actually answering. See the comment there.
+    healthcheck:
+      test: ["CMD-SHELL", "getent hosts mirror.freepbx.org >/dev/null 2>&1 && asterisk -rx 'core show version' >/dev/null 2>&1"]
+      interval: 5m
+      timeout: 20s
+      start_period: 45m
+      retries: 3
+
     tmpfs:
       - /run
       - /run/lock
 
     env_file:
-      - ./pbx.env
+      - path: ./.env
+        required: false
+      - path: ./pbx.env
+        required: false
 
     volumes:
       - ./pbx.env:/etc/freepbx-container.env:ro

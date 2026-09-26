@@ -102,10 +102,14 @@ if [ -d /sys/fs/cgroup ] && [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
     warn "which needs cgroup v2. Expect the container to start and do nothing."
 fi
 
-# The installer pulls several GB and the result is about 8 GB with its data.
+# Measured on the test server, installed and running: the snapshot image
+# 5.1 GB, ./data 2.1 GB, the container's own layer about 1 GB. And until the
+# container is first recreated from the snapshot, the installed software is on
+# disk twice — in the container and in the image. 15 GB free leaves room for
+# that and for a backup; Coolify on the same machine brings about 3 GB more.
 free_gb=$(df -Pk . | awk 'NR==2 {print int($4/1024/1024)}')
-if [ "${free_gb:-99}" -lt 12 ]; then
-    warn "Only ${free_gb} GB free here. The install needs about 12 GB to be comfortable."
+if [ "${free_gb:-99}" -lt 15 ]; then
+    warn "Only ${free_gb} GB free here. The install needs about 15 GB to be comfortable."
 fi
 
 # An installation already here is not something to set up again. Regenerating
@@ -186,10 +190,24 @@ PANEL_DOMAIN=""
 case "$ON_COOLIFY" in
     y|yes|Y|YES)
         ON_COOLIFY=yes
-        PANEL_DOMAIN=$(ask "Domain for the web panel, served with HTTPS by Coolify's proxy" "" SETUP_PANEL_DOMAIN)
-        [ -n "$PANEL_DOMAIN" ] || die "On a Coolify server the panel needs a domain name to be reachable."
-        printf '%s' "$PANEL_DOMAIN" | grep -qE '^[A-Za-z0-9.-]+$' \
-            || die "A domain is a bare name like pbx.example.com — no https:// and no path: $PANEL_DOMAIN"
+        # The domain may wait, and it is safer if it does. A panel on a domain
+        # is on the internet, and until the administrator account exists the
+        # first person to open it becomes the administrator — for the whole
+        # install and after it. This used to insist on a domain, so the only
+        # order it allowed was the unsafe one. Empty now means: the panel stays
+        # on this machine, the account is made through an SSH tunnel, and the
+        # domain is added afterwards (README, "The safe order for the first
+        # login").
+        say ""
+        say "The panel's domain can wait, and it is safer if it does: once it is on a"
+        say "domain it is on the internet, and until the administrator account exists"
+        say "the first person to open it becomes the administrator. Leave this empty,"
+        say "create the account through an SSH tunnel, then publish it (see README)."
+        PANEL_DOMAIN=$(ask "Domain for the web panel (empty = publish it later)" "" SETUP_PANEL_DOMAIN)
+        if [ -n "$PANEL_DOMAIN" ]; then
+            printf '%s' "$PANEL_DOMAIN" | grep -qE '^[A-Za-z0-9.-]+$' \
+                || die "A domain is a bare name like pbx.example.com — no https:// and no path: $PANEL_DOMAIN"
+        fi
         ;;
     *) ON_COOLIFY=no ;;
 esac
@@ -229,7 +247,9 @@ esac
 # reads the project — always uses the whole set. Leaving one out is not
 # harmless: `up -d` without the tunnel file removes the tunnel.
 COMPOSE_FILES="compose.yml"
-[ "$ON_COOLIFY" = yes ] && COMPOSE_FILES="$COMPOSE_FILES:compose.coolify.yml"
+# The Coolify file does one thing — puts the panel on its domain — so it waits
+# for the domain.
+[ -n "$PANEL_DOMAIN" ] && COMPOSE_FILES="$COMPOSE_FILES:compose.coolify.yml"
 [ "$TUNNEL_MODE" = listen ] && COMPOSE_FILES="$COMPOSE_FILES:compose.tunnel-server.yml"
 
 # --- write it down ----------------------------------------------------------
@@ -239,7 +259,10 @@ printf '  extensions   %s  (RTP %s-%s, %s ports)\n' "$EXTENSIONS" "$RTP_START" "
 printf '  panel        %s:%s\n' "$PANEL_BIND" "$PANEL_PORT"
 printf '  SIP          %s\n' "$SIP_PORT"
 printf '  time zone    %s\n' "$PBX_TZ"
-printf '  coolify      %s%s\n' "$ON_COOLIFY" "${PANEL_DOMAIN:+  (panel on https://$PANEL_DOMAIN)}"
+coolify_note=""
+[ "$ON_COOLIFY" = yes ] && coolify_note="  (panel not on a domain yet — publish it once the administrator exists)"
+[ -n "$PANEL_DOMAIN" ] && coolify_note="  (panel on https://$PANEL_DOMAIN)"
+printf '  coolify      %s%s\n' "$ON_COOLIFY" "$coolify_note"
 case "$TUNNEL_MODE" in
     listen) printf '  tunnel       listen on %s/tcp, operator network %s\n' "$TUNNEL_PORT" "$OPERATOR_NET" ;;
     dial)   printf '  tunnel       dial out (tunnel/client.ovpn)\n' ;;
@@ -425,12 +448,34 @@ if [ "$NAT_DONE" = 1 ]; then
 else
     step "Done — and two things only you can do"
 fi
-cat <<'NEXT'
+# Said as it is. This used to promise "before the machine is reachable by
+# anyone else" while the panel it described could already be on a public
+# domain — the one order this message exists to prevent.
+if [ -n "$PANEL_DOMAIN" ]; then
+    cat <<NEXT
+
+1. CREATE THE ADMINISTRATOR ACCOUNT — NOW.
+   The panel is already public at https://${PANEL_DOMAIN} and has no
+   administrator yet: whoever opens it first becomes the administrator.
+NEXT
+elif [ "$PANEL_BIND" = "0.0.0.0" ]; then
+    cat <<NEXT
+
+1. CREATE THE ADMINISTRATOR ACCOUNT — NOW.
+   The panel is already on the internet on port ${PANEL_PORT}, without HTTPS,
+   and has no administrator yet: whoever opens it first becomes the
+   administrator.
+NEXT
+else
+    cat <<NEXT
 
 1. OPEN THE PANEL and create the administrator account.
-   The first person to open it becomes admin, so do this now, before the
-   machine is reachable by anyone else.
+   Only this server can reach it (${PANEL_BIND}:${PANEL_PORT}). From your own computer:
+       ssh -L ${PANEL_PORT}:127.0.0.1:${PANEL_PORT} <you>@<this server>
+   then open http://127.0.0.1:${PANEL_PORT}. Do it before the panel goes on a
+   domain — README, "The safe order for the first login".
 NEXT
+fi
 
 if [ "$NAT_DONE" != 1 ]; then
     cat <<'NEXT'
@@ -450,7 +495,7 @@ tunnel needs its own media address — see tunnel/README.md.
 
     ./doctor.sh          check the usual faults
     ./nat.sh --check     the public address and voice ports Asterisk has now
-    ./snapshot.sh        ⚠️ run this once it works — read the README first
+    ./snapshot.sh        again after a module or package upgrade (the first one is taken)
 
 NEXT
 

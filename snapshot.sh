@@ -17,12 +17,18 @@
 #
 #       Failed to start mariadb.service: Unit mariadb.service not found.
 #
-# Run this once, after the first install finishes. Then set
-#   image: freepbx17-official:installed
-# in compose.yml and comment out the `build:` block.
+# setup.sh runs this once, when the first install finishes, and writes the one
+# line that points the kit at it:
+#
+#     PBX_IMAGE=freepbx17-official:installed        (in .env)
+#
+# compose.yml is not edited, and its `build:` block stays — see the comment
+# above it for the two commands that must never run after an install.
 #
 # Run it again after anything that changes the software rather than the data:
-# `fwconsole ma upgradeall`, a Debian package upgrade, a module install.
+# `fwconsole ma upgradeall`, a Debian package upgrade, a module install. And
+# once more if ./doctor.sh says the snapshot's name points at an image without
+# FreePBX: the running container still has it, and this copies it back.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

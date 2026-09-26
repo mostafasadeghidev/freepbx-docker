@@ -32,7 +32,7 @@ fi
 state=$(docker inspect -f '{{.State.Status}}' freepbx 2>/dev/null || echo "missing")
 case "$state" in
     running) ok "freepbx is running" ;;
-    missing) bad "There is no container called freepbx. Start it: docker compose up -d"; exit 1 ;;
+    missing) bad "There is no container called freepbx. Start it: ./apply.sh"; exit 1 ;;
     *)       bad "freepbx is $state"; note "docker compose logs --tail 50 freepbx"; exit 1 ;;
 esac
 
@@ -132,7 +132,7 @@ if [ "$published" -ge "$want" ]; then
     ok "$published UDP ports are published"
 else
     hmm "$published UDP ports published, expected about $want"
-    note "docker compose up -d   after changing the range in .env"
+    note "./apply.sh   after changing the range in .env"
 fi
 
 # --- ports somebody else holds ----------------------------------------------
@@ -219,15 +219,25 @@ head_ "If this server disappeared tonight"
 # `Failed to start mariadb.service: Unit mariadb.service not found.`
 env_image=$(grep -E '^PBX_IMAGE=' .env 2>/dev/null | cut -d= -f2 | tr -d ' 
 ')
+# shellcheck source=scripts/recreate.sh
+. scripts/recreate.sh
 if ! docker image inspect freepbx17-official:installed >/dev/null 2>&1; then
     bad "No snapshot image — this install is one 'docker compose up -d' from gone."
     note "Run ./snapshot.sh, then set PBX_IMAGE=freepbx17-official:installed in .env."
-elif [ "${env_image:-}" = "freepbx17-official:installed" ]; then
-    ok "A recreate is survivable (PBX_IMAGE points at the installed image)"
-else
+elif [ "${env_image:-}" != "freepbx17-official:installed" ]; then
     bad "A snapshot exists but .env still says PBX_IMAGE=${env_image:-<unset>}"
     note "A recreate would start from the build image and erase the install."
     note "Set PBX_IMAGE=freepbx17-official:installed in .env."
+# The name is right; whether the image behind it still has FreePBX is a
+# separate question. `docker compose build` and `up -d --build` give a fresh,
+# empty image that name — measured, see scripts/recreate.sh — and this used to
+# answer "survivable" about exactly that state.
+elif recreate_erases_install; then
+    bad "The snapshot's name points at an image without FreePBX — a recreate would erase the install."
+    note "That is what 'docker compose build' or 'up -d --build' does after an install."
+    note "Take the snapshot again from the running container: ./snapshot.sh"
+else
+    ok "A recreate is survivable (the snapshot image has FreePBX in it)"
 fi
 
 data_kb=$(du -sk ./data 2>/dev/null | cut -f1)

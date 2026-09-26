@@ -26,7 +26,7 @@
 # ---------------------------------------------------------------------------
 services:
   freepbx:
-    # ⚠️ AFTER THE FIRST INSTALL, RUN `./snapshot.sh` AND SWITCH THE IMAGE.
+    # ⚠️ AFTER THE FIRST INSTALL THE IMAGE HAS TO BE THE SNAPSHOT.
     #
     # The volumes below keep the *data*. They do not keep the *software*: the
     # installer writes mariadb, apache, php, asterisk and their systemd units
@@ -43,13 +43,25 @@ services:
     # back means wiping ./data and installing clean — so take the snapshot.
     #
     # `./snapshot.sh` commits the installed container to
-    # `freepbx17-official:installed`. Point `image:` at that and comment the
-    # `build:` block out, and a recreate starts from the installed state in
-    # seconds instead of destroying it.
-    # `PBX_IMAGE` in .env decides where the software comes from: the default
-    # builds it here, and a registry reference pulls it instead. The build
-    # block stays either way — compose only uses it when the image is missing,
-    # so pointing PBX_IMAGE at a registry costs nothing.
+    # `freepbx17-official:installed`, and one line in .env points the kit at it:
+    #
+    #     PBX_IMAGE=freepbx17-official:installed
+    #
+    # setup.sh does both. This file is not edited, and the `build:` block below
+    # stays: compose builds only when the image PBX_IMAGE names does not exist.
+    #
+    # After an install that is exactly the dangerous case, so two commands are
+    # never run here once FreePBX is installed:
+    #
+    #     docker compose build            docker compose up -d --build
+    #
+    # Both build a fresh, EMPTY image and give it the snapshot's name, and the
+    # next recreate erases the install (measured — see scripts/recreate.sh).
+    # The same happens if an image clean-up deletes the snapshot while the
+    # container still runs the build image, and a plain `up -d` follows —
+    # Coolify's periodic clean-up did exactly that on the test server.
+    # `./apply.sh` looks at the image a recreate would use and refuses both;
+    # `./doctor.sh` reports them.
     build:
       context: .
     image: ${PBX_IMAGE:-freepbx17-official:local}
@@ -164,15 +176,23 @@ services:
       - ./data/home-asterisk:/home/asterisk
 
   # -------------------------------------------------------------------------
-  # The tunnel. Off unless COMPOSE_PROFILES=tunnel in .env.
+  # The tunnel that DIALS OUT. Off unless COMPOSE_PROFILES=tunnel in .env.
   #
-  # It exists for one situation: the PBX is on a server outside the country
-  # and the telephone provider will only exchange calls with an address inside
-  # it. The tunnel gives this container a second address on that side, and the
-  # provider talks to that.
+  # A tunnel exists for one situation: the PBX is on a server outside the
+  # country and the telephone provider will only exchange calls with an
+  # address inside it. The tunnel gives this container a second address on
+  # that side, and the provider talks to that.
   #
-  # Most installations do not need it. A PBX on a server in the same country
-  # as its provider should leave this off and never think about it again.
+  # This service is the rarer of its two directions: this server dials a far
+  # end that has a public address and handed you an .ovpn file. The usual far
+  # end is a router on an office line or a SIM, behind its provider's NAT, which
+  # nothing can dial — then this server LISTENS and the router dials in, and
+  # that is compose.tunnel-server.yml, set up by `./tunnel/listen.sh` (or by
+  # answering `listen` in setup.sh). Measured on a real router: both its lines
+  # were in 100.64.0.0/10, carrier NAT. See tunnel/README.md.
+  #
+  # Most installations need neither. A PBX on a server in the same country as
+  # its provider should leave both off and never think about them again.
   #
   # `network_mode: service:freepbx` puts the tunnel INSIDE the PBX's network
   # namespace rather than beside it — the two share one set of interfaces, so
