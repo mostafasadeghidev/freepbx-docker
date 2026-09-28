@@ -22,7 +22,7 @@
 #
 # A proxy in a container cannot reach a port bound to the host's loopback, and
 # cannot resolve a container on a network it is not attached to. So the answer
-# is the same one Caddy uses on the author's own server: put the PBX on the
+# is the usual one for a proxy that runs in a container: put the PBX on the
 # proxy's network and let the proxy reach it by name.
 #
 # ## What Coolify still owns
