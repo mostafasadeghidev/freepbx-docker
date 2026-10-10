@@ -190,6 +190,26 @@ for mod in ip_gre esp4 xfrm_user xfrm4_tunnel; do $SUDO modprobe "$mod" 2>/dev/n
 printf 'ip_gre\nesp4\nxfrm_user\nxfrm4_tunnel\n' | $SUDO tee /etc/modules-load.d/freepbx-ikev2.conf >/dev/null 2>&1 || true
 lsmod | grep -q '^ip_gre' || die "The kernel's GRE module (ip_gre) could not be loaded on this machine."
 
+# ESP can be switched off on purpose. The published mitigation for "Dirty
+# Frag" (CVE-2026-43284, in ESP, and CVE-2026-43500, in RxRPC) is
+# `install esp4 /bin/false` under /etc/modprobe.d, and with it IKE comes up
+# but no tunnel is ever installed — measured on a production server, where the
+# file had been there since May. Said here, before anything is recreated, with
+# the file and whether this kernel already carries the fix.
+if ! lsmod | grep -q '^esp4'; then
+    blocker="$(grep -rlE '^install +esp4 ' /etc/modprobe.d /lib/modprobe.d 2>/dev/null | head -n 1)"
+    if [ -n "$blocker" ]; then
+        fixed=""
+        log="/usr/share/doc/linux-modules-$(uname -r)/changelog.Debian.gz"
+        [ -f "$log" ] && zgrep -q 'CVE-2026-43284' "$log" 2>/dev/null && fixed=1
+        if [ -n "$fixed" ]; then
+            die "IPsec's ESP module is switched off by $blocker (the Dirty Frag mitigation). This kernel ($(uname -r)) already carries the fix for CVE-2026-43284, which is what Ubuntu says makes the mitigation unnecessary. To allow ESP and keep RxRPC off: sed -i '/^install esp[46] /d' $blocker && modprobe esp4 && update-initramfs -u — then run this again. Nothing was changed."
+        fi
+        die "IPsec's ESP module is switched off by $blocker (the Dirty Frag mitigation), and this kernel's changelog does not show the fix for CVE-2026-43284. Update the kernel and reboot first; then remove the esp4/esp6 lines from that file. Nothing was changed."
+    fi
+    die "The kernel's ESP module (esp4) could not be loaded on this machine; IKEv2 would come up without a tunnel. Nothing was changed."
+fi
+
 # --- .env: the file that publishes 500 and 4500, after the port check --------
 set_env() { if grep -q "^$1=" .env; then sed -i "s#^$1=.*#$1=$2#" .env; else printf '%s=%s\n' "$1" "$2" >> .env; fi; }
 files="$(sed -n 's/^COMPOSE_FILE=//p' .env | tail -n 1)"
