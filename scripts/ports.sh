@@ -27,7 +27,7 @@
 # would report the kit colliding with itself.
 # ---------------------------------------------------------------------------
 
-KIT_CONTAINERS_RE='^(freepbx|freepbx-tunnel|freepbx-tunnel-server)$'
+KIT_CONTAINERS_RE='^(freepbx|freepbx-tunnel|freepbx-tunnel-server|freepbx-tunnel-ikev2)$'
 
 # One line per held range: "<proto> <from> <to> <who>".
 _held_ports() {
@@ -103,6 +103,13 @@ kit_wanted_ports() {
     case ":${COMPOSE_FILE:-}:" in
         *compose.tunnel-server.yml*)
             printf 'TUNNEL_PORT tcp %s %s\n' "${TUNNEL_PORT:-1194}" "${TUNNEL_PORT:-1194}" ;;
+    esac
+    # IKE and IKE inside UDP have no choice of port: a router behind its
+    # operator's NAT moves to 4500 after the first exchange, whatever 500 was.
+    case ":${COMPOSE_FILE:-}:" in
+        *compose.tunnel-ikev2.yml*)
+            printf 'IKE udp 500 500\n'
+            printf 'IKE_NAT_T udp 4500 4500\n' ;;
     esac
 }
 

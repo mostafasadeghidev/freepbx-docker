@@ -301,6 +301,7 @@ ssh -L 8088:127.0.0.1:8088 root@<سرور>
 | ⁦`./nat.sh`⁩ | آدرسِ عمومی و بازهٔ صدا را در FreePBX می‌نویسد و از Asterisk بازمی‌خواند؛ ⁦`--check`⁩ و ⁦`--address`⁩ | بعد از عوض شدنِ IP یا بازهٔ صدا |
 | ⁦`./snapshot.sh`⁩ | کانتینرِ نصب‌شده را ایمیجِ ⁦`freepbx17-official:installed`⁩ می‌کند | بعد از ارتقای ماژول‌ها یا بسته‌های دبیان |
 | ⁦`./tunnel/listen.sh`⁩ | سمتِ گوش‌دهندهٔ تونل را روی نصبِ در حالِ کار می‌سازد یا به‌روز می‌کند؛ روترِ دوم با ⁦`--user`⁩ | برای افزودنِ روتر |
+| ⁦`./tunnel/ikev2.sh`⁩ | تونلِ IKEv2 برای صدا را کنارِ تونلِ OpenVPN می‌سازد؛ OpenVPN پشتیبانِ خودکارش می‌ماند | وقتی صدا بریده‌بریده است |
 
 </div>
 
@@ -409,6 +410,7 @@ wget http://freepbx:80/      → bad address 'freepbx'
 </div>
 
 - **داخلِ خودِ PBX:** با ⁦`network_mode: service:freepbx`⁩، رابطِ ⁦`tun0`⁩ و مسیرِ اپراتور داخلِ فضای شبکهٔ خودِ کانتینرِ تلفن ساخته می‌شوند و Asterisk آدرسِ تونل را مثلِ آدرسِ خودش می‌بیند؛ روی هاست صفر رابطِ tun و صفر مسیر.
+- **برای صدا، IKEv2 کنارِ تونل:** ⁦`./tunnel/ikev2.sh --net 203.0.113.0/24`⁩. اندازه‌گیری‌شده از یک سیم‌کارتِ ایران: OpenVPN روی TCP با یک تماس ۴۱٪ گم‌شدن و وقفه‌های ۱۸ ثانیه‌ای داشت؛ IKEv2 از ۱ تا ۸ تماس ۰ تا ۰٫۰۴٪. اگر IKEv2 قطع شود، صدا خودکار به OpenVPN برمی‌گردد. پورت‌هایش ⁦`500/udp`⁩ و ⁦`4500/udp`⁩ است و با Coolify یا Caddy تداخل ندارد. [شرحِ کامل](tunnel/README.md#-صدای-روان-ikev2-کنارِ-همین-تونل)
 - **صدای روان روی TCP:** الگوی سرور ⁦`tcp-nodelay`⁩ دارد. بدونِ آن، سوکتِ TCP بسته‌های کوچکِ صدا را تا رسیدنِ تأییدِ قبلی نگه می‌دارد — اندازه‌گیری‌شده روی یک تماسِ واقعی: رفت‌وبرگشتِ تونل از ۹۸ به ۲۳۰ تا ۲۷۰ میلی‌ثانیه رسید.
 - **تلهٔ ⁦`iroute`⁩:** شبکهٔ اپراتور باید هم در ⁦`route`⁩ بیاید و هم در ⁦`iroute`⁩؛ بدونِ دومی OpenVPN بسته‌ها را بی‌صدا دور می‌ریزد و هیچ لاگی نمی‌نویسد.
 - **بی‌خطر برای اجرای دوباره:** ⁦`listen.sh`⁩ پورت را پیش از نوشتنِ هر چیز می‌سنجد، رمزِ روترِ موجود را عوض نمی‌کند، روترِ دوم را با ⁦`--user`⁩ اضافه می‌کند، و تا OpenVPN واقعاً گوش ندهد «تمام» نمی‌گوید. نصبی را که هنوز اسنپ‌شات نشده رد می‌کند، چون باز کردنِ پورت کانتینر را از نو می‌سازد.
@@ -423,7 +425,7 @@ wget http://freepbx:80/      → bad address 'freepbx'
 docker save freepbx17-official:installed | gzip > ../freepbx-image.tgz   # تلفن روشن می‌ماند
 docker compose stop                                                        # از اینجا تماس‌ها قطع‌اند
 tar czf ../freepbx-files.tgz data .env pbx.env \
-    $(ls -d tunnel/users tunnel/server.conf tunnel/ccd tunnel/pki tunnel/client.ovpn 2>/dev/null)
+    $(ls -d tunnel/users tunnel/server.conf tunnel/ccd tunnel/pki tunnel/client.ovpn tunnel/ikev2 2>/dev/null)
 docker compose start
 ```
 
@@ -747,6 +749,7 @@ freepbx-docker/
 ├── compose.yml                  سرویسِ اصلی (شبکهٔ bridge)
 ├── compose.coolify.yml          پنل از راهِ پراکسیِ Coolify
 ├── compose.tunnel-server.yml    تونل: سرور گوش می‌دهد
+├── compose.tunnel-ikev2.yml     تونلِ صدا: IKEv2 با GRE
 ├── compose.host-networking.yml  نسخهٔ network_mode: host
 ├── Dockerfile                   Debian 12 + systemd + نصب‌کنندهٔ رسمی
 ├── .env.example                 اندازه، پورت‌ها، ایمیج، فایل‌ها

@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# The tunnel for voice: IKEv2, with GRE inside it, beside the OpenVPN one.
+#
+#     ./tunnel/ikev2.sh --net 203.0.113.0/24 --user router
+#
+# (which writes this file into COMPOSE_FILE and runs ./apply.sh — do not `up`
+# it by hand).
+#
+# ## Why this exists when the OpenVPN tunnel already works
+#
+# Measured on 10 October 2026 from a router on an Iranian SIM to a server in
+# Germany, with RTP-shaped UDP (50 packets/s of 172 bytes) sent out and back:
+#
+#     OpenVPN over TCP   1 call: 41% lost, 4.4 s median delay, 18 s gaps
+#                        4 calls: 99% lost
+#     OpenVPN over UDP   15-18% lost at every call count, packet size and ptime
+#     WireGuard          up for a few minutes, then its handshakes stopped
+#     L2TP/IPsec         0-0.15% lost up to 4 calls, 12% and 8.6 s gaps at 8
+#     IKEv2              0-0.04% lost from 1 to 8 calls; 10 minutes, 2 calls:
+#                        0-0.02% lost, 156-162 ms, longest gap 320 ms
+#
+# The loss on OpenVPN is not the path's: IKEv2 crossed the same SIM and the
+# same route at the same moment without it. And TCP turns every lost packet
+# into a stall of everything behind it, which is what a listener hears as
+# choppy audio and dropped seconds.
+#
+# ## Why GRE inside it
+#
+# IPsec is policy-based: on RouterOS a matching packet with no security
+# association is DROPPED, not sent another way — measured. So IPsec alone
+# cannot fall back to anything. Here IKEv2 protects one small link between the
+# router and this server, and a GRE interface runs inside it. On the router
+# GRE has a keepalive and goes down with IPsec, and the router's route to this
+# server moves to the OpenVPN tunnel by itself. On this side `ikev2-watch.sh`
+# does the same every two seconds. Measured: IKEv2 cut in the middle of a
+# stream — 1.3 s of silence, then the stream went on over OpenVPN; IKEv2 back
+# — onto GRE again without a gap.
+#
+# ## What it shares, and what it leaves alone
+#
+# Like the OpenVPN tunnel it lives in the PBX's own network namespace, so the
+# routes it changes are Asterisk's and nothing on the host. It publishes UDP
+# 500 and 4500 — not 80, not 443 — so it sits beside Coolify's Traefik or a
+# Caddy without touching either.
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    ports:
+      # IKE and IKE inside UDP. Both are needed: the router is behind its
+      # operator's NAT, so after the first exchange everything moves to 4500.
+      - "500:500/udp"
+      - "4500:4500/udp"
+
+  tunnel-ikev2:
+    image: ${TUNNEL_IMAGE:-alpine:3.20}
+    container_name: freepbx-tunnel-ikev2
+    restart: unless-stopped
+    depends_on:
+      - freepbx
+    # Inside the PBX's namespace: the GRE interfaces and the operator routes
+    # are Asterisk's own, like tun0.
+    network_mode: service:freepbx
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./tunnel:/etc/tunnel:ro
+    command: ["sh", "/etc/tunnel/ikev2-run.sh"]
