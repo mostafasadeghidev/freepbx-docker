@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# A second door in front of the panel on its domain: HTTP basic auth at
+# Coolify's proxy, before FreePBX's own login is even reached.
+#
+#     ./panel-auth.sh --user admin          (asks for the password)
+#     ./panel-auth.sh --off
+#
+# (which writes this file into COMPOSE_FILE after compose.coolify.yml and runs
+# ./apply.sh — do not `up` it by hand).
+#
+# ## Why a file middleware, not a label with the hash in it
+#
+# The users live in Coolify's dynamic Traefik directory
+# (/data/coolify/proxy/dynamic, watched live), and this file only names the
+# middleware. So the first time on recreates the telephone container once —
+# a label changes — and every later password change is a file write the
+# proxy picks up in a second, with no call dropped. A hash in a label would
+# also need its `$` doubled for compose and would recreate the PBX on every
+# change.
+#
+# Only the panel's router gets it. The phones register over UDP 5060 and never
+# meet the proxy; nothing of Coolify's own or of any other site is touched.
+# ---------------------------------------------------------------------------
+services:
+  freepbx:
+    labels:
+      traefik.http.routers.pbx.middlewares: zana-pbx-auth@file

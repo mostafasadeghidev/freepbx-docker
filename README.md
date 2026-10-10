@@ -302,6 +302,7 @@ ssh -L 8088:127.0.0.1:8088 root@<سرور>
 | ⁦`./snapshot.sh`⁩ | کانتینرِ نصب‌شده را ایمیجِ ⁦`freepbx17-official:installed`⁩ می‌کند | بعد از ارتقای ماژول‌ها یا بسته‌های دبیان |
 | ⁦`./tunnel/listen.sh`⁩ | سمتِ گوش‌دهندهٔ تونل را روی نصبِ در حالِ کار می‌سازد یا به‌روز می‌کند؛ روترِ دوم با ⁦`--user`⁩ | برای افزودنِ روتر |
 | ⁦`./tunnel/ikev2.sh`⁩ | تونلِ IKEv2 برای صدا را کنارِ تونلِ OpenVPN می‌سازد؛ OpenVPN پشتیبانِ خودکارش می‌ماند | وقتی صدا بریده‌بریده است |
+| ⁦`./panel-auth.sh`⁩ | رمزِ دوم جلوی پنلِ روی دامنه، در پراکسیِ Coolify؛ ⁦`--off`⁩ برش می‌دارد. بارِ اول کانتینر یک بار از نو ساخته می‌شود؛ عوض کردن‌های بعدی بی‌ری‌استارت‌اند | پیش از گذاشتنِ پنل روی دامنه |
 
 </div>
 
@@ -750,6 +751,7 @@ freepbx-docker/
 ├── compose.coolify.yml          پنل از راهِ پراکسیِ Coolify
 ├── compose.tunnel-server.yml    تونل: سرور گوش می‌دهد
 ├── compose.tunnel-ikev2.yml     تونلِ صدا: IKEv2 با GRE
+├── compose.coolify-auth.yml    رمزِ دوم جلوی پنل در پراکسیِ Coolify
 ├── compose.host-networking.yml  نسخهٔ network_mode: host
 ├── Dockerfile                   Debian 12 + systemd + نصب‌کنندهٔ رسمی
 ├── .env.example                 اندازه، پورت‌ها، ایمیج، فایل‌ها
