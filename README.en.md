@@ -278,6 +278,7 @@ All the scripts live in this folder, and none of them changes more than its name
 | `./doctor.sh` | Checks the container, DNS, Asterisk, NAT, voice range, ports, firewall module, trunks and snapshot; touches nothing | Whenever something is odd |
 | `./nat.sh` | Writes the public address and voice range into FreePBX and reads them back from Asterisk; `--check` and `--address` | After the IP or the voice range changes |
 | `./snapshot.sh` | Turns the installed container into the image `freepbx17-official:installed` | After upgrading modules or Debian packages |
+| `./security-update.sh` | Installs Debian's security updates only (PHP, MariaDB…), never Asterisk or FreePBX packages; restarts Apache the way that loads them, checks the panel, takes the snapshot. `DRY_RUN=1` only lists | Whenever a PHP or Debian security hole is announced, with no call in progress |
 | `./tunnel/listen.sh` | Creates or updates the listening end of the tunnel on a running install; a second router with `--user` | To add a router |
 
 > [!WARNING]
@@ -469,6 +470,7 @@ Zana is a desktop app for managing servers over SSH, and it knows this kit. What
 - **FreePBX's own Firewall module** stays off in this container: it breaks DNS and blocks healthy phones — see [troubleshooting](#troubleshooting).
 - **Restrict 5060** to your phones' addresses, if they are static, in your hosting provider's firewall (the Cloud Firewall in its panel) — not with `ufw`: a port Docker publishes is handled before `ufw`'s rules and `ufw` has no effect on it.
 - **If your hosting provider has a firewall in front of the machine**, 5060 and the whole voice range (UDP) must be open there as well; otherwise the result is the same one-way audio.
+- **Debian's security updates are not installed by themselves.** The software lives in the container, not in an image anybody rebuilds. When a hole in PHP or a Debian package is announced — like "php2shell" on 2026-10-21, unauthenticated code execution through the web — run `./security-update.sh`.
 - **The container is `privileged`** — systemd as PID 1 needs it — so it has no serious isolation from the host. Treat the server as if FreePBX were installed on it directly.
 
 ## <a name="troubleshooting"></a>🩺 Troubleshooting and traps
@@ -501,6 +503,8 @@ PBX_IMAGE=freepbx17-official:installed
 `compose.yml` is not edited and its `build:` block stays; from then on a recreate starts from the installed state and takes seconds. The same override was applied again and `fwconsole`, Asterisk, mariadb and apache all stayed.
 
 > After anything that changes the **software** — `fwconsole ma upgradeall`, Debian package upgrades, installing a module — run `./snapshot.sh` again. Not needed for **data** changes (new extensions, settings); those live in the volumes.
+
+**After a PHP upgrade the panel answers 500 until Apache is really started afresh.** Measured on a live install, 2026-10-24, going from 8.2.34 to 8.2.35: mod_php is loaded once, into Apache's parent process, and neither `apache2ctl graceful` nor `apache2ctl restart` replaces that process (same PID). The new extensions refuse the old core (`undefined symbol: _safe_femalloc`) and every page of the panel and UCP answers 500, while `php -v` shows the new version. Only `systemctl restart apache2` fixed it. `./security-update.sh` does exactly that, and asks Apache itself which PHP it runs. UCP's first load afterwards takes up to a minute.
 
 **And reinstalling over the old data does not work.** It is tempting to remove the marker and let the installer run again; measured: the `freepbx17` package installs but `/usr/sbin/fwconsole` is never created, because `/var/www/html` is full from the previous install and the package skips that step (`line 1304: fwconsole: command not found`). The only clean way: back up `./data`, `docker compose down`, delete all of `./data`, and install fresh.
 
@@ -688,6 +692,7 @@ freepbx-docker/
 ├── doctor.sh                    the doctor; only reads
 ├── nat.sh                       public address and voice range
 ├── snapshot.sh                  installed container → image
+├── security-update.sh           Debian security updates only, the Apache restart that loads them, snapshot
 ├── compose.yml                  the main service (bridge networking)
 ├── compose.coolify.yml          the panel through Coolify's proxy
 ├── compose.tunnel-server.yml    the tunnel: the server listens

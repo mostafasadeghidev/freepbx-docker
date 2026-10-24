@@ -26,7 +26,8 @@
 # above it for the two commands that must never run after an install.
 #
 # Run it again after anything that changes the software rather than the data:
-# `fwconsole ma upgradeall`, a Debian package upgrade, a module install. And
+# `fwconsole ma upgradeall`, a Debian package upgrade, a module install.
+# security-update.sh runs it itself, after Debian's security updates. And
 # once more if ./doctor.sh says the snapshot's name points at an image without
 # FreePBX: the running container still has it, and this copies it back.
 # ---------------------------------------------------------------------------
