@@ -85,6 +85,35 @@ echo "Restarting Apache (systemctl, so the new PHP is what it loads)…"
 dex systemctl restart apache2
 sleep 3
 
+# Everything else that still runs the old code. This image's policy-rc.d
+# answers 101, so no package restarts its own service: after 68 upgraded
+# packages, MariaDB, HAProxy and rsyslog were still the old binaries while apt
+# said all was well (measured). The processes are asked directly — which ones
+# still map a binary or library the install deleted — and their systemd units
+# restarted. Not Asterisk or FreePBX: that drops the calls, so they are named
+# and left for a quiet moment (`fwconsole restart`).
+echo
+echo "Restarting the services still running the old files…"
+docker exec -i "$CONTAINER" sh -s <<'SCAN'
+stale() {
+  for m in /proc/[0-9]*/maps; do
+    p=${m#/proc/}; p=${p%/maps}
+    [ "$p" = 1 ] && continue
+    grep -qE '/(usr/)?(s?bin|lib|lib64|libexec)/[^ ]* [(]deleted[)]$' "$m" 2>/dev/null || continue
+    u=$(awk -F/ '{for(i=1;i<=NF;i++) if ($i ~ /[.]service$/) {print $i; exit}}' /proc/$p/cgroup 2>/dev/null)
+    if [ -n "$u" ]; then echo "u $u"; else echo "p $(cat /proc/$p/comm 2>/dev/null)"; fi
+  done | sort -u
+}
+stale | while read kind name; do
+  case "$name" in
+    asterisk*|freepbx*) echo "  still the old libraries, left for a quiet moment (a restart drops the calls): $name"; continue ;;
+    systemd-*|dbus*|user@*) continue ;;
+  esac
+  [ "$kind" = u ] || { echo "  still the old files, not a service: $name"; continue; }
+  if systemctl restart "$name" && systemctl is-active --quiet "$name"; then echo "  restarted: $name"; else echo "  NOT running after the restart: $name"; fi
+done
+SCAN
+
 # PHP through Apache, not the CLI: the CLI was right all along while the web was not.
 probe=/var/www/html/.security-update-probe.php
 printf '%s' '<?php echo PHP_VERSION, " ", extension_loaded("pdo_mysql") && extension_loaded("mbstring") ? "ok" : "missing-extensions";' \

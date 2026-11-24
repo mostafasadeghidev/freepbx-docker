@@ -278,7 +278,7 @@ All the scripts live in this folder, and none of them changes more than its name
 | `./doctor.sh` | Checks the container, DNS, Asterisk, NAT, voice range, ports, firewall module, trunks and snapshot; touches nothing | Whenever something is odd |
 | `./nat.sh` | Writes the public address and voice range into FreePBX and reads them back from Asterisk; `--check` and `--address` | After the IP or the voice range changes |
 | `./snapshot.sh` | Turns the installed container into the image `freepbx17-official:installed` | After upgrading modules or Debian packages |
-| `./security-update.sh` | Installs Debian's security updates only (PHP, MariaDB…), never Asterisk or FreePBX packages; restarts Apache the way that loads them, checks the panel, takes the snapshot. `DRY_RUN=1` only lists | Whenever a PHP or Debian security hole is announced, with no call in progress |
+| `./security-update.sh` | Installs Debian's security updates only (PHP, MariaDB…), never Asterisk or FreePBX packages; restarts Apache the way that loads them, then every other service still running the old files (MariaDB, HAProxy…; not Asterisk, which would drop the calls — it is named), checks the panel, takes the snapshot. `DRY_RUN=1` only lists | Whenever a PHP or Debian security hole is announced, with no call in progress |
 | `./tunnel/listen.sh` | Creates or updates the listening end of the tunnel on a running install; a second router with `--user` | To add a router |
 
 > [!WARNING]
