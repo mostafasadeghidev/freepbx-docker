@@ -56,11 +56,33 @@ for unit in mariadb apache2 freepbx; do
     fi
 done
 
+before=$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+
 echo "Committing $CONTAINER -> $IMAGE (this takes a minute and pauses the PBX briefly)"
 docker commit \
     --change 'CMD ["/sbin/init"]' \
     --change 'STOPSIGNAL SIGRTMIN+3' \
     "$CONTAINER" "$IMAGE"
+
+# The image this tag named before is left with no name — 5.5 GB each time
+# (measured: the disk went from 63% to 76% in two days of snapshots). It goes
+# when no container, running or stopped, still uses it; the running PBX may
+# well be on an older one, and then it stays.
+#
+# Only when the PBX is answering: the previous snapshot is the one way back
+# for the software, so it stays if the container is not running or Asterisk
+# does not answer after the commit's pause.
+if [ -n "$before" ] && [ "$before" != "$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" ]; then
+    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != true ] \
+        || ! docker exec "$CONTAINER" asterisk -rx 'core show version' >/dev/null 2>&1; then
+        echo "The previous snapshot (${before#sha256:}) is kept: the PBX is not answering, so it is still the way back."
+    elif docker ps -aq --no-trunc | xargs -r docker inspect -f '{{.Image}}' | grep -qx "$before"; then
+        echo "The previous snapshot (${before#sha256:}) is kept: a container still uses it."
+    else
+        docker image rm "$before" >/dev/null && echo "Removed the previous snapshot (${before#sha256:}); no container used it." \
+            || echo "Could not remove the previous snapshot (${before#sha256:}); remove it by hand: docker image rm ${before#sha256:}"
+    fi
+fi
 
 echo
 echo "Done. Now point the kit at it — one line in .env:"
